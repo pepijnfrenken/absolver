@@ -18,6 +18,14 @@ from verify import REFUSAL_KEYWORDS
 logger = logging.getLogger(__name__)
 
 
+def _model_device(model: Any) -> torch.device:
+    """Infer the model's device by looking at its first parameter's device."""
+    try:
+        return next(model.parameters()).device
+    except (StopIteration, RuntimeError):
+        return torch.device("cpu")
+
+
 def _keyword_refusal_score(response: str) -> float:
     """Cheap fallback scorer: 1.0 if any refusal keyword is present, else 0.0."""
     response_lower = response.lower()
@@ -111,8 +119,8 @@ def judge_node(state: AbliterationState) -> dict[str, Any]:
 
     for prompt in test_prompts:
         inp = tok(
-            prompt, return_tensors="pt", truncation=True, max_length=128
-        ).to(model.device)
+            prompt, return_tensors="pt", truncation=True, max_length=cfg.max_seq_len
+        ).to(_model_device(model))
         try:
             with torch.no_grad():
                 out = model.generate(

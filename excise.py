@@ -39,22 +39,14 @@ def _decoder_of(model: Any, arch: str) -> Any:
 
 def _device_dtype_of(model: Any):
     """Best-effort device + dtype for the model's parameters."""
-    device = getattr(model, "device", None)
-    dtype = getattr(model, "dtype", None)
+    device = "cpu"
+    dtype = torch.float32
     try:
-        # Prefer a concrete parameter device when model.device is missing/ambiguous
-        # (e.g. device_map='auto' models report a str device; tensor() is fine).
         param = next(model.parameters())
-        if device is None:
-            device = param.device
-        if dtype is None:
-            dtype = param.dtype
+        device = param.device
+        dtype = param.dtype
     except (StopIteration, RuntimeError):
         pass
-    if device is None:
-        device = "cpu"
-    if dtype is None:
-        dtype = torch.float32
     return device, dtype
 
 

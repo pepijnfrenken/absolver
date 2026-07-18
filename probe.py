@@ -243,6 +243,7 @@ def probe_node(state: AbliterationState) -> dict:
                     continue
                 inp = _to_device(inp, device)
                 with torch.no_grad():
+                    model = model.to(device) if hasattr(device, 'type') or isinstance(device, (str, torch.device)) else model
                     model(**inp)
         finally:
             for h in handles:

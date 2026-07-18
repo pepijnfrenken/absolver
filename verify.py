@@ -11,6 +11,14 @@ from state import AbliterationState
 logger = logging.getLogger(__name__)
 
 
+def _model_device(model: Any) -> torch.device:
+    """Infer the model's device by looking at its first parameter's device."""
+    try:
+        return next(model.parameters()).device
+    except (StopIteration, RuntimeError):
+        return torch.device("cpu")
+
+
 # ---------------------------------------------------------------------- #
 # Refusal keywords — verbatim 26-keyword list from the spec.
 # Used by both verify_node and (as fallback) judge_node.
@@ -177,7 +185,7 @@ def run_mmlu_mini(model: Any, tok: Any, n: int = 50) -> float:
             ids = tok(f" {letter}", add_special_tokens=False).input_ids
             choice_token_ids.append(ids[0] if ids else -1)
 
-    device = getattr(model, "device", torch.device("cpu"))
+    device = _model_device(model)
     correct = 0
     total = 0
 
@@ -235,7 +243,7 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
 
     refusals = 0
     for prompt in test_prompts:
-        inp = tok(prompt, return_tensors="pt", truncation=True).to(model.device)
+        inp = tok(prompt, return_tensors="pt", truncation=True).to(_model_device(model))
         response = ""
         try:
             with torch.no_grad():
