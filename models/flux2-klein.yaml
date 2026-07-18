@@ -1,0 +1,22 @@
+model_id: black-forest-labs/FLUX.2-klein-base-4B
+model_arch: diffusion_encoder
+dtype: bfloat16
+device: auto
+trust_remote_code: true
+
+method: advanced
+dir_method: diff_means
+alpha: 0.5
+passes: 3
+target_layers: [26, 27, 28, 29, 30, 31, 32, 33, 34, 35]
+target_weights: [o_proj, down_proj]
+
+n_probe_prompts: 20
+n_verify_prompts: 20
+
+# Text-encoder-only target: no judge, push the encoder state dict.
+judge:
+  enabled: false
+
+push_to_hub: PinoCookie/Flux.2-klein-4B-abliterated-text-encoder
+hub_private: false

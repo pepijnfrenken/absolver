@@ -1,0 +1,58 @@
+{
+  "version": "1.0",
+  "created": "2026-07-18T12:07:47.171Z",
+  "aiwg": {
+    "enabled": true,
+    "mode": "research"
+  },
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/aiwg-permissions.cjs",
+            "_aiwg_managed": true,
+            "_aiwg_id": "aiwg-permissions"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/aiwg-session.cjs",
+            "_aiwg_managed": true,
+            "_aiwg_id": "aiwg-session"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/aiwg-trace.cjs",
+            "_aiwg_managed": true,
+            "_aiwg_id": "aiwg-trace"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/aiwg-trace.cjs",
+            "_aiwg_managed": true,
+            "_aiwg_id": "aiwg-trace"
+          }
+        ]
+      }
+    ]
+  }
+}

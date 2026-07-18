@@ -1,0 +1,28 @@
+model_id: google/diffusiongemma-26B-A4B-it
+model_arch: moe
+dtype: bfloat16
+device: auto
+trust_remote_code: true
+
+offload_folder: /tmp/offload
+
+method: advanced
+dir_method: leace
+alpha: 0.3
+passes: 2
+target_layers: [2, 3, 12, 18]
+target_weights: [o_proj, down_proj, expert.down]
+
+separation_threshold: 5.0
+
+n_probe_prompts: 20
+n_verify_prompts: 20
+
+judge:
+  enabled: false
+
+reflexion:
+  enabled: true
+  max_attempts: 3
+  kb_paths:
+    - ~/.omp/knowledge/red-team/

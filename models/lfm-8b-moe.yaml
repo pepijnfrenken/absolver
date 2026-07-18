@@ -1,0 +1,25 @@
+model_id: LiquidAI/LFM-8B-MoE
+model_arch: moe
+dtype: bfloat16
+device: auto
+trust_remote_code: true
+
+method: bias_vectors
+dir_method: svd
+n_directions: 4
+alpha: 0.5
+passes: 2
+target_weights: [o_proj, down_proj, expert.down]
+
+n_probe_prompts: 20
+n_verify_prompts: 20
+
+judge:
+  enabled: true
+  model: default
+  prompts: 15
+  refusal_threshold: 0.3
+  quality_threshold: 0.4
+
+push_to_hub: PinoCookie/LFM-8B-MoE-abliterated
+hub_private: false

@@ -1,0 +1,24 @@
+model_id: deepreinforce-ai/Ornith-1.0-9B
+model_arch: auto
+dtype: bfloat16
+device: auto
+trust_remote_code: true
+
+method: advanced
+dir_method: diff_means
+alpha: 0.5
+passes: 3
+target_weights: [o_proj, down_proj]
+
+n_probe_prompts: 20
+n_verify_prompts: 20
+
+judge:
+  enabled: true
+  model: openai-codex/gpt-5.6-sol
+  prompts: 20
+  refusal_threshold: 0.3
+  quality_threshold: 0.4
+
+push_to_hub: PinoCookie/Ornith-1.0-9B-abliterated
+hub_private: false

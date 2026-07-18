@@ -1,0 +1,168 @@
+{
+  "managed": {
+    "RULES-INDEX.md": {
+      "hash": "sha256:305a9836a7b477194d383356332a3766e10d9a849bafd26e61aebf761ea9a0d8",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "agentic-installer"
+    },
+    "agent-deployment.md": {
+      "hash": "sha256:4d5b31cf0e9567dcff9c3a154c32af28eb185c6e6ffe4249b972c6ada41809b5",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "auto-compact-continue.md": {
+      "hash": "sha256:631767dd4351c13bbf26612e0099ac73510f3cbbced4a8a06789416acc8d3f5e",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "cli-secondary.md": {
+      "hash": "sha256:81f3f1ec6fad6715f675d8d4bd0e634bd5fe869340e17e5a8c9f41ec83b9f498",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "debug-source-not-output.md": {
+      "hash": "sha256:6bbb3b957dfa04906f6821811c5b05e1f931e3c4191a48be8168449641f6a9d4",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "delivery-policy.md": {
+      "hash": "sha256:cd2987d4e290447b741e8b06fcbaafab2cf33c9eacc4f86b75cddfb2d63777f7",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "escalation-discipline.md": {
+      "hash": "sha256:48dc462cdffcd9475bd178568bd6f6fdeb5c4af1d6e62429c8876d149eb3bd68",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "god-session.md": {
+      "hash": "sha256:2d97de57bf99595ed7444ee39184be5c929d4499e8721a67c1411b23ec51c25a",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "human-authorization.md": {
+      "hash": "sha256:4a4a7afcf0d79d5a3992a7e8f3de7ef353a9449fb4d5cd4206667026e3cc3b8e",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "instruction-comprehension.md": {
+      "hash": "sha256:952c574e88b7e33b44fe6fe4dda2374d2b6e6911dfcecfa273b8cb5406a1d470",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "native-ux-tools.md": {
+      "hash": "sha256:d151150d81906fb7940e6cff963a6818b35de26a2d00523ff99c1a611990cb77",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "quiet-mode.md": {
+      "hash": "sha256:32cf392209f4268a653e625e8a57facb8ef2a4ed010988555936fecc81fe212e",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "research-before-decision.md": {
+      "hash": "sha256:b3337231c994463cabb5d2a1b7a8fa663adee3eddce25f8726f3b5051cc11c64",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "respect-repo-access-manifest.md": {
+      "hash": "sha256:45083b58a1a8201571edbd17a432325af9b021bc3743f2742c3db9ae2a746bbc",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "sdlc-right-sizing.md": {
+      "hash": "sha256:7a9fb092924051a2ccc71d727ac6e5ce5d4cdd756adccc239f7626a94b0f54f5",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "skill-discovery.md": {
+      "hash": "sha256:4f71967629eb70923c4500a7e563e3c7c2c99385e721afd032b8a73d46a93031",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "subagent-scoping.md": {
+      "hash": "sha256:8d90711c5d4d98730eab98056aadb10309331085a0c446e00f729bf1759ecd07",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "tool-quota.md": {
+      "hash": "sha256:07df408d53d909347f0d288d2c6ce41185b81bbd1edce0c2ef0c942e618925a6",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "vague-discretion.md": {
+      "hash": "sha256:ad41c05d4bfdbb1b1f7f21199db1b15b25ee32a2534b27ec0236200bb2bd9b3c",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "aiwg-utils"
+    },
+    "browser-control-safety.md": {
+      "hash": "sha256:ca3b5fe8e57ae7c754866605a89e84523454f8bc6845e8a2e94ad291a180e022",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "browser-control"
+    },
+    "daemon-interaction.md": {
+      "hash": "sha256:8f7b96bc0ee757392b136afc447f70fa5c1473c37a6243e9f47d15b468cecee9",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "daemon"
+    },
+    "prose-resolution.md": {
+      "hash": "sha256:c308da5385e9fa3405120634c85476f44364a183b78ceeb3c885401b9054f67f",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "prose-integration"
+    },
+    "rlm-context-management.md": {
+      "hash": "sha256:9e304e6a950a8ac7b2d2be5fe469ddea4d4dc9afb47ee4734a80ea07b3ac1392",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "rlm"
+    },
+    "twelve-factor-evidence.md": {
+      "hash": "sha256:b3901e0e2001d0c2ae4254aa162d5ffa1bb4e8ab9ddbde713492860858af87ec",
+      "source": "bundled",
+      "version": "unknown",
+      "frameworkSlug": "twelve-factor"
+    },
+    "sec-access-audit-frequency.md": {
+      "hash": "sha256:22d47f4bd597799000adf819e0ed2d638836523c55e4b93197c33c2777a4f69e",
+      "source": "bundled",
+      "version": "unknown"
+    },
+    "sec-cert-expiry-gates.md": {
+      "hash": "sha256:e24151f1f43b9aefca3ee97d7fde1d765d696ccb6158eba7a72890201f69c8ca",
+      "source": "bundled",
+      "version": "unknown"
+    },
+    "sec-key-material-handling.md": {
+      "hash": "sha256:226f42e6c1ef6087b245f5e316820ffc5c4397946d9f6c6f4a275bc363409250",
+      "source": "bundled",
+      "version": "unknown"
+    },
+    "sec-luks-dual-phase.md": {
+      "hash": "sha256:bf5981cb486145c72c79f06b5d96dc8ec8906ffa1496f19e9ea23d66d14ceade",
+      "source": "bundled",
+      "version": "unknown"
+    }
+  }
+}
