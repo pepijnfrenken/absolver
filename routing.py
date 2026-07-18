@@ -6,8 +6,6 @@ next node to execute. They are wired into the graph via
 """
 from __future__ import annotations
 
-from typing import Any
-
 from state import AbliterationState
 
 
@@ -16,7 +14,7 @@ def route_after_distill(state: AbliterationState) -> str:
 
     - Best separation below the configured threshold means the directions
       are not good enough yet. If REFLEXION is enabled and we have already
-      retried ``>= 3`` times, escalate to ``reflexion``; otherwise re-run
+      retried ``>= reflexion_max_attempts`` times, escalate to ``reflexion``; otherwise
       ``probe`` to harvest fresh activations.
     - Otherwise proceed to ``excise``.
     """
@@ -25,7 +23,7 @@ def route_after_distill(state: AbliterationState) -> str:
     cfg = state["config"]
     attempts = state.get("reflexion_attempts", 0)
     if max_score < cfg.separation_threshold:
-        if cfg.reflexion_enabled and attempts >= 3:
+        if cfg.reflexion_enabled and attempts >= cfg.reflexion_max_attempts:
             return "reflexion"
         return "probe"
     return "excise"

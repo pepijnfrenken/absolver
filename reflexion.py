@@ -62,7 +62,7 @@ def reflexion_node(state: AbliterationState) -> dict:
         relevant_patterns: list[str] = []
         for fpath in kb_files[: cfg.reflexion_kb_max_files]:
             try:
-                with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                with open(fpath, encoding="utf-8", errors="ignore") as f:
                     text = f.read(5000)
                 kb_snippets.append(f"--- {os.path.basename(fpath)} ---\n{text[:3000]}")
                 if arch in text or hidden_str in text:
@@ -194,7 +194,8 @@ def reflexion_node(state: AbliterationState) -> dict:
 
         ret["config"] = ModelConfig(**{**cfg.model_dump(), "dir_method": nxt})
     elif strategy == "adjust_alpha":
-        ret["alpha"] = cfg.alpha * (0.5 if quality < 0.4 else 1.5)
+        new_alpha = cfg.alpha * (0.5 if quality < cfg.judge_quality_threshold else 1.5)
+        ret["config"] = cfg.model_copy(update={"alpha": min(new_alpha, 1.0)})
     elif strategy == "switch_to_bias_vectors":
         from config import ModelConfig
 

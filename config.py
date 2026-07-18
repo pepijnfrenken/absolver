@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError
 
-
 # Default reflexion strategy ladder. Order matters: earlier = cheaper.
-DEFAULT_STRATEGY_SPACE: List[str] = [
+DEFAULT_STRATEGY_SPACE: list[str] = [
     "expand_prompts",
     "switch_dir_method",
     "adjust_alpha",
@@ -41,27 +40,41 @@ class ModelConfig(BaseModel):
     """Weights dtype: 'bfloat16', 'float16', 'float32', ..."""
     device: str = "auto"
     """Device map: 'auto', 'cpu', 'cuda', 'cuda:0', ..."""
-    quantize: Optional[str] = None
+    quantize: str | None = None
     """Optional quantization: '4bit' or '8bit' (bitsandbytes)."""
-    revision: Optional[str] = None
+    revision: str | None = None
     """HF Hub revision/commit SHA."""
     trust_remote_code: bool = False
     """Allow loading of custom modeling files from the hub."""
     low_cpu_mem_usage: bool = True
     """Use lazy weight loading to reduce peak CPU memory."""
-    variant: Optional[str] = None
+    variant: str | None = None
     """Weight file variant, e.g. 'fp16'."""
-    offload_folder: Optional[str] = None
+    offload_folder: str | None = None
     """Disk folder for accelerate CPU offload."""
-    max_memory_gpu: Optional[int] = None
+    max_memory_gpu: int | None = None
     """Per-GPU max memory in bytes for device_map='auto'."""
-    max_memory_cpu: Optional[int] = None
+    max_memory_cpu: int | None = None
     """Max CPU memory in bytes for device_map='auto'."""
+
+    # ------------------------------------------------------------------ #
+    # Compute platform
+    # ------------------------------------------------------------------ #
+    platform: str = "local"
+    """Execution platform: 'local', 'modal', or 'molab'."""
+    modal_gpu: str = "L4"
+    """Modal GPU type: L4, A10G, A100, H100."""
+    modal_timeout: int = 7200
+    """Modal function timeout in seconds."""
+    molab_url: str | None = None
+    """Molab endpoint URL (overrides $MOLAB_URL)."""
+    molab_token: str | None = None
+    """Molab API token (overrides $MOLAB_TOKEN)."""
 
     # ------------------------------------------------------------------ #
     # Tokenizer
     # ------------------------------------------------------------------ #
-    tokenizer_id: Optional[str] = None
+    tokenizer_id: str | None = None
     """Override tokenizer id; defaults to `model_id`."""
     use_fast_tokenizer: bool = True
     """Prefer the Rust fast tokenizer."""
@@ -85,15 +98,15 @@ class ModelConfig(BaseModel):
     """Number of refinement passes over the dataset."""
     refinement_passes: int = 0
     """Extra refinement passes after the first excise/verify cycle."""
-    target_layers: List[int] = Field(default_factory=list)
+    target_layers: list[int] = Field(default_factory=list)
     """Explicit target layer indices; empty = auto-select in DISTILL."""
-    target_weights: List[str] = Field(default_factory=lambda: ["o_proj", "down_proj"])
+    target_weights: list[str] = Field(default_factory=lambda: ["o_proj", "down_proj"])
     """Weight names to project ('o_proj', 'down_proj', 'expert.down')."""
     batch_size: int = 8
     """Per-device batch size for the pipeline."""
     max_seq_len: int = 2048
     """Maximum tokenized sequence length."""
-    cache_dir: Optional[str] = None
+    cache_dir: str | None = None
     """Optional HF cache directory override."""
 
     # ------------------------------------------------------------------ #
@@ -117,7 +130,7 @@ class ModelConfig(BaseModel):
     """Max EXCISE retries before escalating to REFLEXION."""
     eval_batch_size: int = 16
     """Batch size used during evaluation."""
-    eval_dataset: Optional[str] = None
+    eval_dataset: str | None = None
 
     # ------------------------------------------------------------------ #
     # Judge (LLM-as-judge via OMP subprocess)
@@ -136,7 +149,7 @@ class ModelConfig(BaseModel):
     """Sampling temperature for the judge."""
     judge_max_tokens: int = 1024
     """Maximum tokens generated per judge response."""
-    judge_api_key: Optional[str] = None
+    judge_api_key: str | None = None
     """API key for the judge endpoint (else pulled from env)."""
 
     # ------------------------------------------------------------------ #
@@ -148,13 +161,13 @@ class ModelConfig(BaseModel):
     """Maximum reflexion retry attempts before giving up."""
     reflexion_db_path: str = "~/.absolver/experience.db"
     """SQLite path for the experience/strategy database."""
-    reflexion_kb_paths: List[str] = Field(default_factory=list)
+    reflexion_kb_paths: list[str] = Field(default_factory=list)
     """Paths (files or dirs) to reflexion knowledge bases."""
     reflexion_kb_max_files: int = 50
     """Max KB files to load in one reflexion pass."""
     reflexion_kb_llm_consult: bool = True
     """Allow an OMP LLM consultation over KB snippets on first attempt."""
-    reflexion_strategy_space: List[str] = Field(
+    reflexion_strategy_space: list[str] = Field(
         default_factory=lambda: list(DEFAULT_STRATEGY_SPACE)
     )
     """Ordered fallback strategies (cheapest first)."""
@@ -168,12 +181,26 @@ class ModelConfig(BaseModel):
     # ------------------------------------------------------------------ #
     # Hugging Face Hub
     # ------------------------------------------------------------------ #
-    push_to_hub: Optional[str] = None
+    push_to_hub: str | None = None
     """Target repo id to push to (None/empty = don't push)."""
-    hub_token: Optional[str] = None
+    hub_token: str | None = None
     """HF Hub access token (else pulled from `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN`)."""
     hub_private: bool = True
     """Create the target hub repo as private if it does not exist."""
+
+    # ------------------------------------------------------------------ #
+    # Platform (local | modal | molab)
+    # ------------------------------------------------------------------ #
+    platform: str = "local"
+    """Execution platform: 'local', 'modal', or 'molab'."""
+    modal_gpu: str = "L4"
+    """Modal GPU class: 'L4', 'A10G', 'A100', or 'H100'."""
+    modal_timeout: int = 7200
+    """Modal function timeout in seconds."""
+    molab_url: str | None = None
+    """Molab endpoint URL (or MOLAB_URL env var)."""
+    molab_token: str | None = None
+    """Molab API bearer token (or MOLAB_TOKEN env var)."""
 
     # ------------------------------------------------------------------ #
     # Misc
@@ -184,7 +211,7 @@ class ModelConfig(BaseModel):
     model_config = {"extra": "ignore"}
 
 
-def _flatten_nested(data: Dict[str, Any]) -> Dict[str, Any]:
+def _flatten_nested(data: dict[str, Any]) -> dict[str, Any]:
     """Flatten ``judge:`` and ``reflexion:`` sub-mappings into top-level keys.
 
     Allows YAML configs to use either::
@@ -193,7 +220,7 @@ def _flatten_nested(data: Dict[str, Any]) -> Dict[str, Any]:
           model: foo
     or the flat form:: judge_enabled: true
     """
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for key, value in data.items():
         if key in ("judge", "reflexion") and isinstance(value, dict):
             for sub_key, sub_val in value.items():
@@ -203,7 +230,7 @@ def _flatten_nested(data: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def load_config(path: Union[str, Path]) -> ModelConfig:
+def load_config(path: str | Path) -> ModelConfig:
     """Load a :class:`ModelConfig` from a YAML file at ``path``.
 
     Raises:
@@ -243,16 +270,20 @@ def load_config(path: Union[str, Path]) -> ModelConfig:
         ) from exc
 
 
-def dump_config(config: ModelConfig, path: Union[str, Path]) -> None:
+def dump_config(config: ModelConfig, path: str | Path) -> None:
     """Serialize ``config`` to YAML at ``path`` (parent dirs are created)."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        data = config.model_dump()
+        data = config.model_dump(exclude={"judge_api_key", "hub_token"})
     except AttributeError:
         # pydantic v1 fallback
-        data = config.dict()
+        data = {
+            k: v
+            for k, v in config.dict().items()
+            if k not in {"judge_api_key", "hub_token"}
+        }
 
     try:
         with p.open("w", encoding="utf-8") as f:

@@ -1,23 +1,22 @@
 """SUMMON node: model + tokenizer load, experience-DB query, arch detection.
 
-Loads the configured HuggingFace model (trying a diffusion pipeline first,
-then a causal LM, then a seq2seq LM), inspects its architecture, queries the
-experience database for known-good hyperparameters, and returns the loaded
-model + descriptor fields that downstream nodes (PROBE / DISTILL / EXCISE)
-consume.
+Loads the configured HuggingFace model (trying a diffusion text encoder
+first when configured, then a causal LM, then a seq2seq LM), inspects its
+architecture, queries the experience database for known-good
+hyperparameters, and returns the loaded model + descriptor fields that
+downstream nodes (PROBE / DISTILL / EXCISE) consume.
 """
 from __future__ import annotations
 
 import logging
-import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 import torch
 
 from config import ModelConfig
-from state import AbliterationState
 from detector import detect_architecture
 from experience import ExperienceDB
+from state import AbliterationState
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +54,7 @@ _TOK_KWARG_KEYS = (
 )
 
 
-def _tokenizer_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+def _tokenizer_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     """Filter model-load kwargs down to what ``AutoTokenizer.from_pretrained``
     will actually accept."""
     return {k: v for k, v in kwargs.items() if k in _TOK_KWARG_KEYS}
@@ -83,7 +82,7 @@ def send_marimo_toast(title: str, subtitle: str = "") -> None:
     logger.info("SUMMON toast: %s | %s", title, subtitle)
 
 
-def _merge_prior_into_config(cfg: ModelConfig, prior: Dict[str, Any]) -> None:
+def _merge_prior_into_config(cfg: ModelConfig, prior: dict[str, Any]) -> None:
     """Apply prior-experience knobs to ``cfg`` ONLY for fields the user did
     not explicitly set. Explicit user choices (notably ``target_layers``) are
     never clobbered.
@@ -135,7 +134,7 @@ def summon_node(state: AbliterationState) -> dict:
     db = ExperienceDB(cfg.reflexion_db_path)
 
     # 2. Query DB for prior attempts.
-    prior: Optional[Dict[str, Any]] = db.query_best_method(cfg.model_id)
+    prior: dict[str, Any] | None = db.query_best_method(cfg.model_id)
     if not prior:
         # similar_arch needs a hidden_size hint, which ModelConfig doesn't
         # carry pre-load. Try defensively; if absent, skip.
@@ -152,17 +151,27 @@ def summon_node(state: AbliterationState) -> dict:
 
     # 3. Load model.
     dtype = getattr(torch, cfg.dtype, None)
-    kwargs: Dict[str, Any] = {
+    kwargs: dict[str, Any] = {
         "trust_remote_code": cfg.trust_remote_code,
         "device_map": cfg.device,
     }
     if dtype is not None:
         kwargs["torch_dtype"] = dtype
     if cfg.quantize:
-        if cfg.quantize == "4bit":
-            kwargs["load_in_4bit"] = True
-        elif cfg.quantize == "8bit":
-            kwargs["load_in_8bit"] = True
+        try:
+            from transformers import BitsAndBytesConfig
+            if cfg.quantize == "4bit":
+                kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16
+                )
+            elif cfg.quantize == "8bit":
+                kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
+        except ImportError:
+            logger.warning(
+                "quantize=%s requested but BitsAndBytesConfig unavailable; "
+                "loading unquantized.",
+                cfg.quantize,
+            )
     if cfg.offload_folder:
         kwargs["offload_folder"] = cfg.offload_folder
     if cfg.cache_dir:
@@ -179,25 +188,32 @@ def summon_node(state: AbliterationState) -> dict:
     is_diffusion = False
     errors = []
 
-    # 3a. Try as a diffusion pipeline first.
-    try:
-        from diffusers import Flux2KleinPipeline  # type: ignore
+    # 3a. Try as a diffusion text encoder first (only when requested).
+    #     diffusers ships NO Flux2KleinPipeline; for diffusion models we
+    #     modify the causal-LM text encoder that lives under text_encoder/.
+    if getattr(cfg, "model_arch", None) == "diffusion_encoder":
+        try:
+            from transformers import AutoModelForCausalLM
 
-        pipe = Flux2KleinPipeline.from_pretrained(cfg.model_id, **kwargs)
-        model = pipe.text_encoder  # the text encoder is what we modify
-        if AutoTokenizer is not None:
-            try:
-                tokenizer = AutoTokenizer.from_pretrained(
-                    cfg.model_id, subfolder="tokenizer", **tok_kwargs
-                )
-            except Exception:
-                tokenizer = AutoTokenizer.from_pretrained(
-                    cfg.model_id, **tok_kwargs
-                )
-        is_diffusion = True
-        logger.info("Loaded %s as diffusion pipeline; using text encoder.", cfg.model_id)
-    except Exception as exc:
-        errors.append(f"diffusion: {exc}")
+            model = AutoModelForCausalLM.from_pretrained(
+                cfg.model_id, subfolder="text_encoder", **kwargs
+            )
+            if AutoTokenizer is not None:
+                try:
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        cfg.model_id, subfolder="tokenizer", **tok_kwargs
+                    )
+                except Exception:
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        cfg.model_id, **tok_kwargs
+                    )
+            is_diffusion = True
+            logger.info(
+                "Loaded %s as diffusion text encoder (text_encoder subfolder).",
+                cfg.model_id,
+            )
+        except Exception as exc:
+            errors.append(f"diffusion: {exc}")
 
     # 3b. Try as a standard causal LM.
     if model is None:

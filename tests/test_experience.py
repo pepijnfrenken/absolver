@@ -7,7 +7,6 @@ plus summary stats and corruption recovery.
 from __future__ import annotations
 
 import os
-import sqlite3
 
 import pytest
 

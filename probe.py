@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import torch
 
@@ -36,7 +36,7 @@ def _infer_device(model: Any) -> Any:
         return torch.device("cpu")
 
 
-def _find_layers(model: Any, arch: Optional[str]):
+def _find_layers(model: Any, arch: str | None):
     """Locate the ``layers`` ModuleList to hook.
 
     For diffusion text encoders we go straight to ``model.model.layers``.
@@ -59,7 +59,7 @@ def _find_layers(model: Any, arch: Optional[str]):
     return None
 
 
-def _to_device(batch: Dict[str, Any], device: Any) -> Dict[str, Any]:
+def _to_device(batch: dict[str, Any], device: Any) -> dict[str, Any]:
     """Move a tokenizer output batch to ``device``."""
     out = {}
     for k, v in batch.items():
@@ -70,7 +70,7 @@ def _to_device(batch: Dict[str, Any], device: Any) -> Dict[str, Any]:
     return out
 
 
-def _make_hook(name: int, store: Dict[int, List[torch.Tensor]]):
+def _make_hook(name: int, store: dict[int, list[torch.Tensor]]):
     """Forward hook capturing the last-token hidden state.
 
     Handles both 3D outputs ``[batch, seq, hidden]`` (takes ``[:, -1, :]``)
@@ -93,10 +93,10 @@ def _make_hook(name: int, store: Dict[int, List[torch.Tensor]]):
     return hook
 
 
-def _find_moe_layer_indices(layers, num_layers: int) -> List[int]:
+def _find_moe_layer_indices(layers, num_layers: int) -> list[int]:
     """Return indices of layers that look like MoE experts (have a router /
     block_sparse_moe / experts attribute)."""
-    moe_idxs: List[int] = []
+    moe_idxs: list[int] = []
     for i in range(num_layers):
         layer = layers[i]
         bsm = getattr(layer, "block_sparse_moe", None)
@@ -117,11 +117,11 @@ def _find_moe_layer_indices(layers, num_layers: int) -> List[int]:
 def _collect_router_logits(
     model: Any,
     tok: Any,
-    prompts: List[str],
+    prompts: list[str],
     device: Any,
     layers,
     num_layers: int,
-) -> Optional[Dict[int, torch.Tensor]]:
+) -> dict[int, torch.Tensor] | None:
     """Run each prompt with ``output_router_logits=True`` and stack the
     last-token router logit per MoE layer.
 
@@ -132,7 +132,7 @@ def _collect_router_logits(
     if not moe_idxs:
         return None
 
-    collected: Dict[int, List[torch.Tensor]] = defaultdict(list)
+    collected: dict[int, list[torch.Tensor]] = defaultdict(list)
 
     for p in prompts:
         try:
@@ -178,7 +178,7 @@ def _collect_router_logits(
         return None
 
     # Stack per-prompt router logits into [n_prompts, n_experts] per layer.
-    stacked: Dict[int, torch.Tensor] = {}
+    stacked: dict[int, torch.Tensor] = {}
     for layer_idx, tensors in collected.items():
         try:
             stacked[layer_idx] = torch.stack(tensors)
@@ -226,10 +226,10 @@ def probe_node(state: AbliterationState) -> dict:
         len(harmless),
     )
 
-    harm_acts: Dict[int, List[torch.Tensor]] = defaultdict(list)
-    harmless_acts: Dict[int, List[torch.Tensor]] = defaultdict(list)
+    harm_acts: dict[int, list[torch.Tensor]] = defaultdict(list)
+    harmless_acts: dict[int, list[torch.Tensor]] = defaultdict(list)
 
-    def run_set(prompts: List[str], store: Dict[int, List[torch.Tensor]]) -> None:
+    def run_set(prompts: list[str], store: dict[int, list[torch.Tensor]]) -> None:
         handles = [
             layers[i].register_forward_hook(_make_hook(i, store))
             for i in range(num_layers)
@@ -254,7 +254,7 @@ def probe_node(state: AbliterationState) -> dict:
     run_set(harmful, harm_acts)
     run_set(harmless, harmless_acts)
 
-    router_logits: Optional[Dict[int, torch.Tensor]] = None
+    router_logits: dict[int, torch.Tensor] | None = None
     if arch == "moe":
         router_logits = _collect_router_logits(
             model, tok, harmful, device, layers, num_layers

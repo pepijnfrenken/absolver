@@ -6,13 +6,12 @@ for the CLI.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from config import load_config
 from graph import build_abliteration_graph
 
 
-def run_pipeline(config_path: str | Path, thread_id: Optional[str] = None) -> dict:
+def run_pipeline(config_path: str | Path, thread_id: str | None = None) -> dict:
     """Run the full abliteration pipeline from a config file.
 
     Args:

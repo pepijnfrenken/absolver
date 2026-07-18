@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import torch
 
 from state import AbliterationState
 
 
-def rebirth_node(state: AbliterationState) -> Dict[str, Any]:
+def rebirth_node(state: AbliterationState) -> dict[str, Any]:
     """Save the modified model to disk, optionally push to the HF Hub, write
     an ``abliteration_metadata.json`` sidecar, and record the run in the
     experience DB.
@@ -45,7 +45,7 @@ def rebirth_node(state: AbliterationState) -> Dict[str, Any]:
 
     # 3. Write the metadata sidecar.
     separation_scores = state.get("separation_scores") or {}
-    metadata: Dict[str, Any] = {
+    metadata: dict[str, Any] = {
         "model_id": cfg.model_id,
         "method": cfg.method,
         "dir_method": cfg.dir_method,

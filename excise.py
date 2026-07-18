@@ -6,11 +6,14 @@ Works for dense, MoE, and diffusion-encoder (text encoder) architectures.
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+import logging
+from typing import Any
 
 import torch
 
 from state import AbliterationState
+
+_log = logging.getLogger(__name__)
 
 
 def _decoder_of(model: Any, arch: str) -> Any:
@@ -88,7 +91,7 @@ def _project_3d_expert(weight: torch.Tensor, d: torch.Tensor, alpha: float) -> N
         ) from exc
 
 
-def excise_node(state: AbliterationState) -> Dict[str, Any]:
+def excise_node(state: AbliterationState) -> dict[str, Any]:
     """Project the refusal direction out of the model's weights in place.
 
     Returns a partial state dict with:
@@ -115,10 +118,24 @@ def excise_node(state: AbliterationState) -> Dict[str, Any]:
 
         d = directions[layer_idx]
         # Some distill methods return [n_dirs, hidden]; take the strongest.
+        # Warn when extra directions are silently dropped (Bug 7).
         if torch.is_tensor(d) and d.dim() > 1:
+            n_directions = d.shape[0]
+            if n_directions > 1:
+                _log.warning(
+                    "EXCISE: layer %s returned %d refusal directions; "
+                    "only the first is projected (the rest are discarded).",
+                    layer_idx,
+                    n_directions,
+                )
             d = d[0]
+        # Normalize once on the model's primary device/dtype. Per-weight
+        # device placement is re-applied inside each projection branch
+        # (Bug 6: weights may live on different devices, e.g. device_map).
         d = d.to(device=device, dtype=dtype)
-        d = d / (d.norm() + 1e-8)
+        # clamp(min=...) keeps epsilon meaningful under fp16/bf16 where
+        # adding 1e-8 to a ~1.0 norm would round away to 1.0 (Bug 5).
+        d = d / d.norm().clamp(min=1e-8)
 
         layer = decoder.layers[layer_idx]
         modified_weights: list = []

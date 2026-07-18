@@ -8,9 +8,7 @@ weights are present, how many layers, etc.).
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
-
-import torch
+from typing import Any
 
 # transformers / diffusers are required at runtime but the module must still
 # import (e.g. for py_compile) even if they are absent in a stripped env.
@@ -91,7 +89,7 @@ def _safe_getattr(obj: Any, name: str) -> Any:
         return None
 
 
-def _inspect_decoder_layer(layer: Any) -> Dict[str, Any]:
+def _inspect_decoder_layer(layer: Any) -> dict[str, Any]:
     """Probe a single decoder layer for the markers we care about.
 
     Real HF decoders nest the projection linear layers (e.g. Llama):
@@ -149,7 +147,7 @@ def _inspect_decoder_layer(layer: Any) -> Dict[str, Any]:
     }
 
 
-def _hidden_size_from_config(model: Any) -> Optional[int]:
+def _hidden_size_from_config(model: Any) -> int | None:
     cfg = _safe_getattr(model, "config")
     if cfg is None:
         return None
@@ -160,7 +158,7 @@ def _hidden_size_from_config(model: Any) -> Optional[int]:
     return None
 
 
-def _count_experts(layer: Any) -> Optional[int]:
+def _count_experts(layer: Any) -> int | None:
     """Best-effort expert count for an MoE layer."""
     experts = _safe_getattr(layer, "experts")
     if experts is None:
@@ -180,7 +178,7 @@ def _count_experts(layer: Any) -> Optional[int]:
                 return v
         return None
 
-def _layer_types(model: Any, layers: Any) -> Optional[List[str]]:
+def _layer_types(model: Any, layers: Any) -> list[str] | None:
     """Return per-layer type tags if the model exposes them (e.g. sliding vs
     full attention in Gemma2/Qwen2.5). None if not available."""
     cfg = _safe_getattr(model, "config")
@@ -206,8 +204,8 @@ def _layer_types(model: Any, layers: Any) -> Optional[List[str]]:
     return None
 
 
-def _build_target_weights(has_o_proj: bool, has_down_proj: bool, has_experts: bool) -> List[str]:
-    tw: List[str] = []
+def _build_target_weights(has_o_proj: bool, has_down_proj: bool, has_experts: bool) -> list[str]:
+    tw: list[str] = []
     if has_o_proj:
         tw.append("o_proj")
     if has_down_proj:
@@ -219,9 +217,9 @@ def _build_target_weights(has_o_proj: bool, has_down_proj: bool, has_experts: bo
     return tw
 
 
-def _describe_modules(model: Any, limit: int = 40) -> List[str]:
+def _describe_modules(model: Any, limit: int = 40) -> list[str]:
     """Top-N named_modules dump for error messages."""
-    out: List[str] = []
+    out: list[str] = []
     try:
         for i, (name, _mod) in enumerate(model.named_modules()):
             if i >= limit:
@@ -238,7 +236,7 @@ def _describe_modules(model: Any, limit: int = 40) -> List[str]:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def detect_architecture(model: Any) -> Dict[str, Any]:
+def detect_architecture(model: Any) -> dict[str, Any]:
     """Inspect `model` and return an architecture descriptor dict.
 
     Detection order (see plan §5):
@@ -252,7 +250,7 @@ def detect_architecture(model: Any) -> Dict[str, Any]:
     Raises:
         UnsupportedArchitecture: if none of the patterns match.
     """
-    text_encoder_model: Optional[Any] = None
+    text_encoder_model: Any | None = None
 
     # ------------------------------------------------------------------
     # 1-4. Standard decoder path: model.model.layers
@@ -271,7 +269,7 @@ def detect_architecture(model: Any) -> Dict[str, Any]:
 
         if is_moe:
             architecture = "moe"
-            num_experts: Optional[int] = _count_experts(first)
+            num_experts: int | None = _count_experts(first)
         else:
             architecture = "dense"
             num_experts = None
@@ -358,8 +356,8 @@ def detect_architecture(model: Any) -> Dict[str, Any]:
     # ------------------------------------------------------------------
     # 6. Last resort: walk named_modules() for .*layers\.\d+
     # ------------------------------------------------------------------
-    fallback_layers: Dict[str, Any] = {}
-    fallback_prefixes: Dict[str, Any] = {}
+    fallback_layers: dict[str, Any] = {}
+    fallback_prefixes: dict[str, Any] = {}
     try:
         for name, mod in model.named_modules():
             m = _LAYER_RE.match(name)

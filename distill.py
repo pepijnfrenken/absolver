@@ -7,7 +7,7 @@ the target layers to project during EXCISE.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 import torch
 
@@ -18,12 +18,17 @@ logger = logging.getLogger(__name__)
 
 
 def _safe_svd(x: torch.Tensor, full_matrices: bool = False):
-    """``torch.linalg.svd`` with a CPU fallback for finicky backends (e.g. MPS)."""
+    """``torch.linalg.svd`` with a CPU fallback for finicky backends (e.g. MPS).
+
+    On fallback the decomposed factors are moved back to the input tensor's
+    device so callers never receive leaked CPU tensors.
+    """
     try:
         return torch.linalg.svd(x, full_matrices=full_matrices)
     except Exception as exc:  # pragma: no cover - backend-specific
         logger.warning("SVD failed on device %s (%s); retrying on CPU.", x.device, exc)
-        return torch.linalg.svd(x.cpu(), full_matrices=full_matrices)
+        U, S, Vt = torch.linalg.svd(x.cpu(), full_matrices=full_matrices)
+        return U.to(x.device), S.to(x.device), Vt.to(x.device)
 
 
 def _diff_means(
@@ -51,10 +56,16 @@ def _svd(
     n_dirs: int,
     device: str,
 ):
-    """Stack per-prompt diffs (harm - harmless_mean); SVD; U[:,:n_dirs].T; score=S[0]."""
-    diffs = (harm_stack - harmless_mean.unsqueeze(0)).to(device)
-    U, S, _Vt = _safe_svd(diffs, full_matrices=False)
-    direction = U[:, :n_dirs].T  # [n_dirs, *] per spec
+    """Stack per-prompt diffs (harm - harmless_mean); SVD; Vt[:n_dirs]; score=S[0].
+
+    ``Vt`` rows are feature-space directions (right singular vectors), which is
+    the correct space for refusal directions. ``U`` columns live in sample
+    space and must not be used as the direction here.
+    """
+    del hidden
+    diffs = harm_stack.to(device) - harmless_mean.to(device).unsqueeze(0)
+    _U, S, Vt = _safe_svd(diffs, full_matrices=False)
+    direction = Vt[:n_dirs]  # [n_dirs, hidden] in feature space
     score = S[0].item()
     return direction, score
 
@@ -66,8 +77,16 @@ def _leace(
     n_dirs: int,
     device: str,
 ):
-    """LEACE: covariance of stacked harm+harmless, lstsq for beta, normalize; score=d@Sigma@d."""
-    del n_dirs
+    """LEACE: covariance of stacked harm+harmless, lstsq for beta, normalize; score=d@Sigma@d.
+
+    LEACE against a single binary concept yields exactly one direction, so
+    ``n_dirs > 1`` is clamped to 1 with a warning rather than fabricating
+    orthogonal directions with no concept alignment.
+    """
+    if n_dirs > 1:
+        logger.warning(
+            "LEACE produces a single concept direction; clamping n_dirs=%d to 1.", n_dirs
+        )
     n_harm = harm_stack.shape[0]
     n_harmless = harmless_stack.shape[0]
     X = torch.cat([harm_stack, harmless_stack], dim=0).to(device)
@@ -94,13 +113,20 @@ def _whitened_svd(
     n_dirs: int,
     device: str,
 ):
-    """Cholesky whitening then SVD on whitened harm acts; Vt[:n_dirs]; score=S[0]."""
+    """Cholesky whitening then SVD on whitened harm acts; Vt[:n_dirs]; score=S[0].
+
+    Whitening applies ``L^{-1}`` (a triangular solve against the Cholesky
+    factor), not ``(L L^T)^{-1}``, so rows end up with identity covariance in
+    the L^{-1} metric without being over-whitened by the full Sigma^{-1}.
+    """
     X_combined = torch.cat([harm_stack, harmless_stack], dim=0).to(device)
     # Population covariance via torch.cov expects [features, samples].
     Sigma = torch.cov(X_combined.T)
     L = torch.linalg.cholesky(Sigma + 1e-6 * torch.eye(hidden, device=device))
     # Whitened harm acts: solve L @ W = harm^T  ->  W = L^{-1} @ harm^T, then transpose.
-    whitened = torch.cholesky_solve(harm_stack.to(device).T, L).T
+    whitened = torch.linalg.solve_triangular(
+        L, harm_stack.to(device).T, upper=False
+    ).T
     _U, S, Vt = _safe_svd(whitened, full_matrices=False)
     direction = Vt[:n_dirs]  # [n_dirs, hidden]
     score = S[0].item()
@@ -114,19 +140,23 @@ def distill_node(state: AbliterationState) -> dict:
     ``separation_scores``, and ``target_layers``.
     """
     cfg: ModelConfig = state["config"]
-    harm_acts: Dict[int, Any] = state.get("harm_acts") or {}
-    harmless_acts: Dict[int, Any] = state.get("harmless_acts") or {}
+    harm_acts: dict[int, Any] = state.get("harm_acts") or {}
+    harmless_acts: dict[int, Any] = state.get("harmless_acts") or {}
     num_layers: int = state.get("num_layers", 0)
     hidden: int = state.get("hidden_size", 0)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Prefer the device declared on the config; fall back to CUDA detection.
+    raw_device = getattr(cfg, "device", "auto")
+    device = raw_device if raw_device not in (None, "auto") else (
+        "cuda" if torch.cuda.is_available() else "cpu"
+    )
 
     dir_method: str = cfg.dir_method
     n_dirs = max(1, min(cfg.n_directions, hidden)) if hidden else cfg.n_directions
 
-    directions: Dict[int, torch.Tensor] = {}
-    scores: Dict[int, float] = {}
+    directions: dict[int, torch.Tensor] = {}
+    scores: dict[int, float] = {}
 
-    layer_indices: List[int] = (
+    layer_indices: list[int] = (
         list(range(num_layers)) if num_layers else sorted(set(harm_acts) | set(harmless_acts))
     )
 
@@ -163,7 +193,7 @@ def distill_node(state: AbliterationState) -> dict:
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
 
     if cfg.target_layers:
-        target_layers: List[int] = list(cfg.target_layers)
+        target_layers: list[int] = list(cfg.target_layers)
     else:
         # Auto: top-10 layers with score > separation_threshold (default 5).
         threshold = float(cfg.separation_threshold)

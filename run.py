@@ -2,7 +2,7 @@
 """CLI entry point for Absolver.
 
 Usage:
-    python run.py <config.yaml> [--resume <thread_id>]
+    python run.py <config.yaml> [--resume <thread_id>] [--platform local|modal|molab]
 """
 from __future__ import annotations
 
@@ -25,10 +25,28 @@ def main() -> None:
         "config", help="Path to config YAML (e.g., models/ornith-9b.yaml)"
     )
     parser.add_argument(
+        "--platform",
+        default="local",
+        choices=["local", "modal", "molab"],
+        help="Where to execute the pipeline (default: local).",
+    )
+    parser.add_argument(
         "--resume", help="Resume from a checkpoint thread id", default=None
     )
     args = parser.parse_args()
 
+    # --- remote dispatch -------------------------------------------------
+    if args.platform == "modal":
+        from connectors.modal_runner import run_pipeline_modal
+        run_pipeline_modal(args.config)
+        return
+
+    if args.platform == "molab":
+        from connectors.molab_runner import run_pipeline_molab
+        run_pipeline_molab(args.config)
+        return
+
+    # --- local (default) -------------------------------------------------
     config = load_config(args.config)
     graph = build_abliteration_graph()
 

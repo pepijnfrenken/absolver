@@ -1,0 +1,33 @@
+[project]
+name = "absolver"
+version = "0.1.0"
+description = "LangGraph-based abliteration pipeline for LLMs"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.0.0",
+    "transformers>=4.30.0",
+    "langgraph>=0.3.0",
+    "langgraph-checkpoint>=2.0.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+    "huggingface-hub>=0.20.0",
+    "numpy>=1.24.0",
+    "diffusers>=0.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.15.0",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP"]
+ignore = ["E501"]  # line length handled above
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

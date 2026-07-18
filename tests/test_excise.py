@@ -8,8 +8,6 @@ through DISTILL and EXCISE, then asserts:
 """
 from __future__ import annotations
 
-from typing import Dict, List
-
 import pytest
 import torch
 import torch.nn as nn
@@ -79,8 +77,8 @@ def toy_state():
     direction = direction / direction.norm()
 
     n_prompts = 10
-    harm_acts: Dict[int, List[torch.Tensor]] = {}
-    harmless_acts: Dict[int, List[torch.Tensor]] = {}
+    harm_acts: dict[int, list[torch.Tensor]] = {}
+    harmless_acts: dict[int, list[torch.Tensor]] = {}
     for i in range(n_layers):
         base = torch.randn(n_prompts, hidden) * 0.1
         harm_acts[i] = [direction + base[j] for j in range(n_prompts)]
@@ -151,7 +149,7 @@ class TestDistill:
 # Excise tests
 # ---------------------------------------------------------------------- #
 class TestExcise:
-    def _snapshot(self, model) -> Dict[int, Dict[str, torch.Tensor]]:
+    def _snapshot(self, model) -> dict[int, dict[str, torch.Tensor]]:
         snap = {}
         for i, layer in enumerate(model.model.layers):
             snap[i] = {

@@ -11,8 +11,9 @@ import os
 import sqlite3
 import threading
 import time
+import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 
 class ExperienceDB:
@@ -33,9 +34,11 @@ class ExperienceDB:
         try:
             self._conn = self._open(self.db_path)
             self._init_schema()
-        except sqlite3.DatabaseError:
-            # Corrupt DB detected on first real SQL — back up and recreate.
-            self._recover()
+        except sqlite3.DatabaseError as exc:
+            # Recover only on a real corruption signature; otherwise let the
+            # error propagate so transient failures aren't masked by a wipe.
+            if not self._recover_if_corrupt(exc):
+                raise
 
     # ------------------------------------------------------------------ #
     # Connection / schema
@@ -62,12 +65,64 @@ class ExperienceDB:
                 pass
             return conn
 
+    # Signatures observed from real SQLite corruption; transient errors
+    # (locked, busy, disk I/O) must NOT trigger destructive recovery.
+    _CORRUPTION_SIGNATURES = (
+        "malformed",
+        "corrupt",
+        "disk image",
+        "file is not a database",
+        "file is encrypted",
+        "database disk image is malformed",
+    )
+
+    def _is_corruption_error(self, exc: BaseException) -> bool:
+        """True only if ``exc`` looks like on-disk corruption.
+
+        Conservative: a transient error (locked / busy / I/O) returns False,
+        so the caller re-raises instead of wiping the database. When in doubt
+        we run PRAGMA integrity_check as a second opinion.
+        """
+        msg = str(exc).lower()
+        if any(sig in msg for sig in self._CORRUPTION_SIGNATURES):
+            return True
+        return self._integrity_check_fails()
+
+    def _integrity_check_fails(self) -> bool:
+        """Run ``PRAGMA integrity_check``; True if it reports corruption.
+
+        Any error running the pragma (locked, busy, etc.) is treated as
+        *not* corruption — we'd rather raise than destroy data.
+        """
+        try:
+            cur = self._conn.cursor()
+            cur.execute("PRAGMA integrity_check")
+            result = cur.fetchone()
+        except sqlite3.DatabaseError:
+            return False
+        if result is None:
+            return False
+        value = str(result[0]).lower()
+        return value != "ok"
+
+    def _recover_if_corrupt(self, exc: BaseException) -> bool:
+        """Recover only when ``exc`` is a real corruption signature.
+
+        Returns True if recovery was performed, False otherwise (in which
+        case the caller should re-raise the original error).
+        """
+        if not self._is_corruption_error(exc):
+            return False
+        self._recover()
+        return True
+
     @staticmethod
     def _backup_corrupt(db_path: str) -> None:
         if db_path == ":memory:" or not os.path.exists(db_path):
             return
         ts = int(time.time())
-        backup = f"{db_path}.corrupt.{ts}"
+        suffix = f"{ts}.{uuid.uuid4().hex[:8]}"
+        backup = f"{db_path}.corrupt.{suffix}"
         try:
             os.replace(db_path, backup)
         except OSError:
@@ -139,10 +194,10 @@ class ExperienceDB:
         max_separation: float,
         final_verdict: str,
         reflexion_attempts: int = 0,
-        reflexion_history: Optional[list] = None,
-        refusal_rate: Optional[float] = None,
-        quality_mean: Optional[float] = None,
-        num_experts: Optional[int] = None,
+        reflexion_history: list | None = None,
+        refusal_rate: float | None = None,
+        quality_mean: float | None = None,
+        num_experts: int | None = None,
     ) -> int:
         """Insert an attempt row and upsert the model profile.
 
@@ -208,8 +263,12 @@ class ExperienceDB:
                 )
                 self._conn.commit()
                 return attempt_id or 0
-            except sqlite3.DatabaseError:
-                self._recover()
+            except sqlite3.DatabaseError as exc:
+                # Only wipe+rebuild on a real corruption signature; on a
+                # transient error (locked/busy/I/O) re-raise so the caller
+                # sees the failure instead of silently losing the write.
+                if not self._recover_if_corrupt(exc):
+                    raise
                 # Retry once after recovery.
                 cur = self._conn.cursor()
                 cur.execute(
@@ -266,7 +325,7 @@ class ExperienceDB:
     # ------------------------------------------------------------------ #
     # Queries
     # ------------------------------------------------------------------ #
-    def query_best_method(self, model_id: str) -> Optional[dict]:
+    def query_best_method(self, model_id: str) -> dict | None:
         """Return known-good params for an exact model_id, or None.
 
         Only returns a result when the last recorded verdict was 'success'.
@@ -285,18 +344,9 @@ class ExperienceDB:
                 )
                 row = cur.fetchone()
             except sqlite3.DatabaseError:
-                self._recover()
-                cur = self._conn.cursor()
-                cur.execute(
-                    """
-                    SELECT last_method, last_dir_method, last_alpha,
-                           last_passes, last_target_layers, last_verdict
-                    FROM model_profiles
-                    WHERE model_id = ?
-                    """,
-                    (model_id,),
-                )
-                row = cur.fetchone()
+                # Read-only path: never recover (that would wipe the DB).
+                # Surface the error to the caller instead.
+                raise
 
         if row is None:
             return None
@@ -319,7 +369,7 @@ class ExperienceDB:
 
     def query_similar_arch(
         self, architecture: str, hidden_size: int
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Find the best-quality prior attempt for a similar architecture.
 
         "Similar" = same architecture name and hidden_size within +/-100.
@@ -339,6 +389,7 @@ class ExperienceDB:
                     FROM attempts
                     WHERE architecture = ?
                       AND hidden_size BETWEEN ? AND ?
+                      AND final_verdict = 'success'
                     ORDER BY quality_mean DESC
                     LIMIT 1
                     """,
@@ -346,24 +397,9 @@ class ExperienceDB:
                 )
                 row = cur.fetchone()
             except sqlite3.DatabaseError:
-                self._recover()
-                cur = self._conn.cursor()
-                cur.execute(
-                    """
-                    SELECT model_id, architecture, hidden_size, num_layers,
-                           num_experts, method_used, dir_method, alpha, passes,
-                           target_layers, target_weights, max_separation,
-                           refusal_rate, quality_mean, final_verdict,
-                           reflexion_attempts, reflexion_history
-                    FROM attempts
-                    WHERE architecture = ?
-                      AND hidden_size BETWEEN ? AND ?
-                    ORDER BY quality_mean DESC
-                    LIMIT 1
-                    """,
-                    (architecture, lo, hi),
-                )
-                row = cur.fetchone()
+                # Read-only path: never recover (that would wipe the DB).
+                # Surface the error to the caller instead.
+                raise
 
         if row is None:
             return None
@@ -383,16 +419,9 @@ class ExperienceDB:
                 )
                 rows = cur.fetchall()
             except sqlite3.DatabaseError:
-                self._recover()
-                cur = self._conn.cursor()
-                cur.execute(
-                    """
-                    SELECT architecture, method_used, final_verdict, COUNT(*) AS n
-                    FROM attempts
-                    GROUP BY architecture, method_used, final_verdict
-                    """
-                )
-                rows = cur.fetchall()
+                # Read-only path: never recover (that would wipe the DB).
+                # Surface the error to the caller instead.
+                raise
 
         by_arch: dict = {}
         by_method: dict = {}
@@ -448,10 +477,11 @@ class ExperienceDB:
 
     def _recover(self) -> None:
         """Close, back up the corrupt file, and reopen + reinit schema."""
-        try:
-            self._conn.close()
-        except sqlite3.Error:
-            pass
+        if hasattr(self, "_conn") and self._conn:
+            try:
+                self._conn.close()
+            except sqlite3.Error:
+                pass
         if self.db_path != ":memory:":
             self._backup_corrupt(self.db_path)
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
@@ -512,7 +542,7 @@ class ExperienceDB:
             except sqlite3.Error:
                 pass
 
-    def __enter__(self) -> "ExperienceDB":
+    def __enter__(self) -> ExperienceDB:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
