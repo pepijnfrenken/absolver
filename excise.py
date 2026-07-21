@@ -57,6 +57,7 @@ def _project_2d(weight: torch.Tensor, d: torch.Tensor, alpha: float) -> None:
     Raises a clear error if the tensor is quantized (4/8-bit) and cannot
     be mutated in place.
     """
+    d = d.to(dtype=weight.dtype)
     try:
         weight.sub_(alpha * torch.einsum("i,j->ij", d, d @ weight))
     except RuntimeError as exc:
@@ -90,6 +91,7 @@ def excise_node(state: AbliterationState) -> dict[str, Any]:
       - ``projection_applied``: True
       - ``passes_completed``: incremented
       - ``excise_history``: appended history entries for this pass
+      - ``pristine_state_dict``: saved before first excise pass for restoration
     """
     model = state["model_obj"]
     arch = state["architecture"]
@@ -98,6 +100,24 @@ def excise_node(state: AbliterationState) -> dict[str, Any]:
     target_weights = state.get("target_weights", [])
     alpha = state["config"].alpha
     passes_completed = state.get("passes_completed", 0) + 1
+
+    # Save pristine model state before the FIRST excise pass so retries
+    # (cumulative weight damage from earlier passes) can restore it later.
+    pristine = state.get("pristine_state_dict")
+    if pristine is None:
+        pristine = {
+            k: v.clone().cpu() if isinstance(v, torch.Tensor) else v
+            for k, v in model.state_dict().items()
+        }
+
+    # Restore pristine weights before applying this pass's projections.
+    # This avoids cumulative damage across retries (P0-5).
+    if passes_completed > 1 and pristine is not None:
+        _log.info("EXCISE pass %d: restoring pristine weights before projection", passes_completed)
+        model.load_state_dict(
+            {k: v.to(device=model.device) if isinstance(v, torch.Tensor) else v
+             for k, v in pristine.items()}
+        )
 
     device, dtype = _device_dtype_of(model)
     decoder = _decoder_of(model, arch)
@@ -112,6 +132,24 @@ def excise_node(state: AbliterationState) -> dict[str, Any]:
         # Some distill methods return [n_dirs, hidden]; take the strongest.
         # Warn when extra directions are silently dropped (Bug 7).
         if torch.is_tensor(d) and d.dim() > 1:
+            # Distill methods can return directions of any rank >= 1
+            # ([n_dirs, hidden] from SVD, [n_dirs, c, c] if the upstream
+            # SVD got batched by a 3D activation stack, etc.). We want the
+            # single strongest direction as a flat [hidden] vector.
+            # ``reshape(-1)`` would smear across axes; instead flatten only
+            # the leading direction-selection axes and take row 0.
+            if d.dim() > 2:
+                _log.warning(
+                    "EXCISE: layer %s direction has unexpected rank %d "
+                    "(shape=%s); collapsing leading dims. Check PROBE "
+                    "activation shapes — a 3D harm_stack batched the SVD.",
+                    layer_idx,
+                    d.dim(),
+                    tuple(d.shape),
+                )
+                # Collapse everything except the last axis into one "dirs"
+                # axis so d[0] reliably yields the feature-space vector.
+                d = d.reshape(-1, d.shape[-1])
             n_directions = d.shape[0]
             if n_directions > 1:
                 _log.warning(
@@ -133,14 +171,20 @@ def excise_node(state: AbliterationState) -> dict[str, Any]:
         modified_weights: list = []
 
         # --- o_proj (attention output) ---
-        if (
-            "o_proj" in target_weights
-            and hasattr(layer, "self_attn")
-            and hasattr(layer.self_attn, "o_proj")
-        ):
-            W = layer.self_attn.o_proj.weight.data
-            _project_2d(W, d, alpha)
-            modified_weights.append("o_proj")
+        # Try both self_attn.o_proj and linear_attn.out_proj; Qwen3.5 hybrid
+        # layers use either path depending on the layer.
+        if "o_proj" in target_weights:
+            o_modified = False
+            if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
+                W = layer.self_attn.o_proj.weight.data
+                _project_2d(W, d, alpha)
+                o_modified = True
+            if hasattr(layer, "linear_attn") and hasattr(layer.linear_attn, "out_proj"):
+                W = layer.linear_attn.out_proj.weight.data
+                _project_2d(W, d, alpha)
+                o_modified = True
+            if o_modified:
+                modified_weights.append("o_proj")
 
         # --- down_proj (MLP) ---
         if "down_proj" in target_weights:
@@ -170,4 +214,5 @@ def excise_node(state: AbliterationState) -> dict[str, Any]:
         "projection_applied": True,
         "passes_completed": passes_completed,
         "excise_history": history,
+        "pristine_state_dict": pristine,
     }

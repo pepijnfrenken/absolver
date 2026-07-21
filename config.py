@@ -13,7 +13,6 @@ DEFAULT_STRATEGY_SPACE: list[str] = [
     "switch_dir_method",
     "adjust_alpha",
     "expand_target_layers",
-    "switch_to_bias_vectors",
     "skip_model",
 ]
 
@@ -208,7 +207,7 @@ class ModelConfig(BaseModel):
     seed: int = 42
     """Global RNG seed."""
 
-    model_config = {"extra": "ignore"}
+    model_config = {"extra": "forbid"}
 
 
 def _flatten_nested(data: dict[str, Any]) -> dict[str, Any]:

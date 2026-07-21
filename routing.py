@@ -33,6 +33,8 @@ def route_after_verify(state: AbliterationState) -> str:
     """Pick the next node after VERIFY (judge disabled path).
 
     - If the judge is enabled, always go to ``judge``.
+    - If the overall quality pass is True (refusal rate acceptable AND MMLU
+      score sufficient), go to ``rebirth`` directly.
     - If refusal rate exceeds the ouroboros threshold and we are under the
       retry cap, loop back to ``excise`` for another projection pass.
     - Otherwise, if REFLEXION is enabled, try ``reflexion``; else accept
@@ -41,6 +43,9 @@ def route_after_verify(state: AbliterationState) -> str:
     cfg = state["config"]
     if cfg.judge_enabled:
         return "judge"
+    quality_pass = state.get("quality_pass", False)
+    if quality_pass:
+        return "rebirth"
     if state.get("refusal_rate", 0) > cfg.ouroboros_threshold:
         if state.get("ouroboros_count", 0) < cfg.max_ouroboros_passes:
             return "excise"

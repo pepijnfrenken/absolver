@@ -243,7 +243,6 @@ def probe_node(state: AbliterationState) -> dict:
                     continue
                 inp = _to_device(inp, device)
                 with torch.no_grad():
-                    model = model.to(device) if hasattr(device, 'type') or isinstance(device, (str, torch.device)) else model
                     model(**inp)
         finally:
             for h in handles:
@@ -272,4 +271,6 @@ def probe_node(state: AbliterationState) -> dict:
         "harm_acts": dict(harm_acts),
         "harmless_acts": dict(harmless_acts),
         "router_logits": router_logits,
+        "harmful_prompts": harmful,
+        "harmless_prompts": harmless,
     }

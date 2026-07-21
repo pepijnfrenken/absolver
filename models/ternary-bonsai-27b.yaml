@@ -1,0 +1,43 @@
+model_id: prism-ml/Ternary-Bonsai-27B-unpacked
+model_arch: auto
+dtype: bfloat16
+device: auto
+quantize: null
+
+# Pipeline
+method: advanced
+n_directions: 4
+dir_method: diff_means
+alpha: 0.5
+target_layers: []
+target_weights: ["o_proj", "down_proj"]
+separation_threshold: 5.0
+max_ouroboros_passes: 3
+reflexion_enabled: true
+reflexion_max_attempts: 3
+
+# Probing
+n_probe_prompts: 20
+max_seq_len: 512
+probe_batch_size: 4
+
+# Verification
+verify_sample_size: 0
+ouroboros_threshold: 0.1
+
+# Judge
+judge_model: openai-codex/gpt-5.6-sol
+judge_max_tokens: 256
+judge_temperature: 0.0
+judge_prompts: 5
+judge_quality_threshold: 0.6
+judge_api_key: ""
+
+# Hub
+push_to_hub: null
+hub_token: null
+
+# Platform
+platform: molab
+molab_url: "https://sb-d989e9ab663aa596.sb.molab.run/"
+molab_token: "b4d91380f127a3e2e4382e6ed40e79c82ae7b3b66ddc5204679a7373d0a01419"

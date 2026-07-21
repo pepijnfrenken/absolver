@@ -209,18 +209,19 @@ def run_mmlu_mini(model: Any, tok: Any, n: int = 50) -> float:
     return correct / total if total else 0.0
 
 
-def _cuda_ready_for_mmlu(allocated_threshold_bytes: int = 10 * 1024 ** 3) -> bool:
+def _cuda_ready_for_mmlu(min_free_bytes: int = 2 * 1024 ** 3) -> bool:
     """Return True only when CUDA is available and has enough free memory.
 
-    We require both ``torch.cuda.is_available()`` and
-    ``torch.cuda.memory_allocated()`` below an absolute threshold (default
-    10 GiB), which approximates "model isn't already saturating the GPU".
+    We require both ``torch.cuda.is_available()`` and at least
+    ``min_free_bytes`` of unallocated GPU memory (default 2 GiB), so we can
+    run MMLU inference without OOM even when a large model is loaded.
     On CPU-only environments this always returns False, so MMLU is skipped.
     """
     try:
         if not torch.cuda.is_available():
             return False
-        return torch.cuda.memory_allocated() < allocated_threshold_bytes
+        free, _total = torch.cuda.mem_get_info()
+        return free >= min_free_bytes
     except Exception:  # pragma: no cover — defensive
         return False
 
@@ -286,9 +287,20 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
     if refusal_rate > cfg.ouroboros_threshold:
         ouroboros_count += 1
 
+    # ------------------------------------------------------------------ #
+    # 4. Overall quality check — combines refusal rate and MMLU score.
+    # ------------------------------------------------------------------ #
+    refusal_pass = refusal_rate < cfg.ouroboros_threshold
+    if mmlu_score is not None:
+        # MMLU was actually run; require both thresholds.
+        quality_pass = refusal_pass and (mmlu_score >= 0.25)
+    else:
+        # No MMLU data; fall back to refusal-only.
+        quality_pass = refusal_pass
+
     return {
         "refusal_rate": refusal_rate,
         "ouroboros_count": ouroboros_count,
         "mmlu_score": mmlu_score,
-        "quality_pass": refusal_rate < cfg.ouroboros_threshold,
+        "quality_pass": quality_pass,
     }

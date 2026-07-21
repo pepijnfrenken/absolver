@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 import torch
 
 from state import AbliterationState
+
+_log = logging.getLogger(__name__)
 
 
 def rebirth_node(state: AbliterationState) -> dict[str, Any]:
@@ -22,6 +25,23 @@ def rebirth_node(state: AbliterationState) -> dict[str, Any]:
     model = state["model_obj"]
     architecture = state.get("architecture", "")
 
+    # ------------------------------------------------------------------ #
+    # 0. Gate: only export when the pipeline actually succeeded.
+    #    Failed runs (high refusal / poor quality / rejected by judge) are
+    #    recorded in the experience DB but NOT persisted to disk.
+    # ------------------------------------------------------------------ #
+    quality_pass = state.get("quality_pass", False)
+    judge_verdict = state.get("judge_verdict", None)
+    failed = (judge_verdict is not None and judge_verdict != "pass") or not quality_pass
+
+    if failed:
+        _log.warning(
+            "REBIRTH: pipeline failed (quality_pass=%s, judge_verdict=%s); "
+            "skipping model export. Experience DB will still be updated.",
+            quality_pass,
+            judge_verdict,
+        )
+
     # 1. Resolve output directory and make sure it exists.
     #    When pushing to the Hub we still need a local copy to upload from.
     output_dir = Path(
@@ -29,21 +49,23 @@ def rebirth_node(state: AbliterationState) -> dict[str, Any]:
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 2. Save model weights.
+    # 2. Save model weights — only if the pipeline passed.
     #    Diffusion targets only modify the text encoder, so we serialize its
     #    state_dict directly. For everything else we prefer save_pretrained,
     #    but fall back to a raw state_dict dump if that fails (CPU/seq2seq/
     #    custom architectures sometimes reject save_pretrained).
-    if architecture == "diffusion_encoder":
-        torch.save(model.state_dict(), output_dir / "text_encoder.pt")
-    else:
-        try:
-            model.save_pretrained(str(output_dir))
-        except Exception as exc:
-            print(f"save_pretrained failed ({exc}); falling back to state_dict")
-            torch.save(model.state_dict(), output_dir / "pytorch_model.pt")
+    if not failed:
+        if architecture == "diffusion_encoder":
+            torch.save(model.state_dict(), output_dir / "text_encoder.pt")
+        else:
+            try:
+                model.save_pretrained(str(output_dir))
+            except Exception as exc:
+                print(f"save_pretrained failed ({exc}); falling back to state_dict")
+                torch.save(model.state_dict(), output_dir / "pytorch_model.pt")
 
-    # 3. Write the metadata sidecar.
+    # 3. Write the metadata sidecar — always, even on failure, so the
+    #    experience DB still gets a record of what happened.
     separation_scores = state.get("separation_scores") or {}
     metadata: dict[str, Any] = {
         "model_id": cfg.model_id,
@@ -60,13 +82,14 @@ def rebirth_node(state: AbliterationState) -> dict[str, Any]:
         "reflexion_history": state.get("reflexion_history", []),
         "final_verdict": state.get("reflexion_final_verdict", "success"),
         "separation_scores": {str(k): v for k, v in separation_scores.items()},
+        "pipeline_passed": not failed,
     }
     with (output_dir / "abliteration_metadata.json").open("w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
 
-    # 4. Push to the HF Hub (best-effort).
+    # 4. Push to the HF Hub (best-effort) — only if the pipeline passed.
     hub_success = False
-    if cfg.push_to_hub:
+    if not failed and cfg.push_to_hub:
         try:
             from huggingface_hub import HfApi
 

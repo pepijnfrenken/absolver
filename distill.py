@@ -63,7 +63,21 @@ def _svd(
     space and must not be used as the direction here.
     """
     del hidden
+    # PROBE should yield per-prompt 1D activations (last token), so
+    # harm_stack is [n_samples, hidden]. Defensive: if a hook captured extra
+    # leading axes, flatten to 2D — a batched SVD over the last two dims
+    # would otherwise produce Vt[:n_dirs] with a spurious extra axis.
+    if harm_stack.dim() != 2:
+        logger.warning(
+            "_svd: harm_stack has %d dims (shape=%s); flattening to 2D. "
+            "Check probe.py hook capture shape.",
+            harm_stack.dim(),
+            tuple(harm_stack.shape),
+        )
+        harm_stack = harm_stack.reshape(-1, harm_stack.shape[-1])
+        harmless_mean = harmless_mean.reshape(-1)
     diffs = harm_stack.to(device) - harmless_mean.to(device).unsqueeze(0)
+    diffs = diffs.squeeze()
     _U, S, Vt = _safe_svd(diffs, full_matrices=False)
     direction = Vt[:n_dirs]  # [n_dirs, hidden] in feature space
     score = S[0].item()

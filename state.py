@@ -64,6 +64,9 @@ class AbliterationState(TypedDict, total=False):
     projection_applied: bool
     passes_completed: int
     excise_history: list[dict[str, Any]]
+    pristine_state_dict: dict[str, Any] | None
+    """Saved model state dict before first EXCISE pass, for restoration on
+    retry. Prevents cumulative weight damage across ouroboros loops."""
     alpha: float
     """Effective alpha (may be tuned by REFLEXION)."""
 

@@ -87,7 +87,6 @@ def reflexion_node(state: AbliterationState) -> dict:
         "switch_dir_method",
         "adjust_alpha",
         "expand_target_layers",
-        "switch_to_bias_vectors",
         "skip_model",
     ]
     idx = min(attempt - 1, len(fallback_strategies) - 1)
@@ -147,7 +146,6 @@ def reflexion_node(state: AbliterationState) -> dict:
         "switch_dir_method": "distill",
         "adjust_alpha": "excise",
         "expand_target_layers": "distill",
-        "switch_to_bias_vectors": "probe",
         "skip_model": "rebirth",
     }
     next_action = action_map.get(strategy, "rebirth")
@@ -195,11 +193,16 @@ def reflexion_node(state: AbliterationState) -> dict:
         ret["config"] = ModelConfig(**{**cfg.model_dump(), "dir_method": nxt})
     elif strategy == "adjust_alpha":
         new_alpha = cfg.alpha * (0.5 if quality < cfg.judge_quality_threshold else 1.5)
-        ret["config"] = cfg.model_copy(update={"alpha": min(new_alpha, 1.0)})
-    elif strategy == "switch_to_bias_vectors":
-        from config import ModelConfig
-
-        ret["config"] = ModelConfig(**{**cfg.model_dump(), "method": "bias_vectors"})
+        ret["config"] = cfg.model_copy(update=dict(alpha=min(new_alpha, 1.0)))
+    elif strategy == "expand_target_layers":
+        num_layers = state.get("num_layers", 0)
+        existing = state.get("target_layers", [])
+        if num_layers > 0:
+            # Double the target set: add every other layer not already selected.
+            all_layers = set(range(num_layers))
+            expanded = list(set(existing) | all_layers)
+            expanded.sort()
+            ret["target_layers"] = expanded
     elif strategy == "skip_model":
         ret["reflexion_final_verdict"] = "incompatible"
 
