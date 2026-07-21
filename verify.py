@@ -273,7 +273,7 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
     # 2. MMLU mini — only on capable CUDA with room to spare.
     # ------------------------------------------------------------------ #
     mmlu_score: float | None = None
-    if cfg.verify_sample_size > 0 and _cuda_ready_for_mmlu():
+    if cfg.verify_sample_size > 0:
         try:
             mmlu_score = run_mmlu_mini(model, tok, n=cfg.verify_sample_size)
         except Exception as exc:  # pragma: no cover — never crash VERIFY
