@@ -20,13 +20,18 @@ passes: 1
 target_layers: [26, 27]
 target_weights: [o_proj]
 paired_prefill: "Sure, I can help with that."
-paired_max_new_tokens: 48
+paired_max_new_tokens: 64
 
-# ---- Probe / prompts (smaller for speed) ----
+# ---- Probe / prompts (known-good scale: 40 prompts, not 12) ----
 prompt_format: "auto"
-n_probe_prompts: 12
+n_probe_prompts: 40
 n_verify_prompts: 10
 max_seq_len: 512
+
+# Reflexion off: its KB re-routes to probe/distill, which reset
+# ouroboros_count and cause an unbounded excise→verify→judge→reflexion
+# loop (observed: ouroboros=2,4,6,2,4,6... over 2h, 10 judge verdicts).
+reflexion_enabled: false
 
 # ---- Judge ----
 judge_model: "deepseek-v4-flash"
