@@ -180,6 +180,17 @@ def judge_node(state: AbliterationState) -> dict[str, Any]:
         )
 
     # ------------------------------------------------------------------ #
+    # 2b. Per-prompt judge log — the detail needed to understand WHY a run
+    #     failed (which prompts still refuse, with the judge's reason).
+    # ------------------------------------------------------------------ #
+    for r in results:
+        logger.info(
+            "JUDGE per-prompt: refusal=%.2f quality=%.2f | %s",
+            r["refusal_score"], r["quality_score"],
+            r["prompt"][:70].replace("\n", " "),
+        )
+
+    # ------------------------------------------------------------------ #
     # 3. Aggregate and emit a verdict.
     # ------------------------------------------------------------------ #
     if results:

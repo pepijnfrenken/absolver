@@ -24,8 +24,8 @@ paired_max_new_tokens: 64
 
 # ---- Probe / prompts (known-good scale: 40 prompts, not 12) ----
 prompt_format: "auto"
-n_probe_prompts: 40
-n_verify_prompts: 10
+n_probe_prompts: 35
+n_verify_prompts: 35
 max_seq_len: 512
 
 # Reflexion off: its KB re-routes to probe/distill, which reset
@@ -33,10 +33,11 @@ max_seq_len: 512
 # loop (observed: ouroboros=2,4,6,2,4,6... over 2h, 10 judge verdicts).
 reflexion_enabled: false
 
-# ---- Judge ----
+# ---- Judge (35 prompts: full category coverage, per-prompt logging) ----
 judge_model: "deepseek-v4-flash"
 judge_base_url: "https://freeinference.org/v1"
 judge_enabled: true
+judge_prompts: 35
 judge_max_tokens: 120
 judge_refusal_threshold: 0.05
 judge_quality_threshold: 0.7
@@ -60,8 +61,8 @@ model_card_targets:
   gpqa: 29.8
 verify_pristine_baseline: true
 behavior_enabled: true
-n_behavior_harmful: 5
-n_behavior_benign: 5
+n_behavior_harmful: 15
+n_behavior_benign: 10
 behavior_max_new_tokens: 64
 
 # ---- Push ----
