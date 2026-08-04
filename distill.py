@@ -252,6 +252,11 @@ def distill_node(state: AbliterationState) -> dict:
     cfg: ModelConfig = state["config"]
     harm_acts: dict[int, Any] = state.get("harm_acts") or {}
     harmless_acts: dict[int, Any] = state.get("harmless_acts") or {}
+    # dir_method 'paired' consumes the output-phase paired activations
+    # (probe_mode auto/paired). Fall back to input-phase sets if absent.
+    if getattr(cfg, "dir_method", "diff_means") == "paired":
+        harm_acts = state.get("paired_refusal_acts") or harm_acts
+        harmless_acts = state.get("paired_affirm_acts") or harmless_acts
     num_layers: int = state.get("num_layers", 0)
     hidden: int = state.get("hidden_size", 0)
     # Prefer the device declared on the config; fall back to CUDA detection.

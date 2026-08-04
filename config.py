@@ -113,12 +113,21 @@ class ModelConfig(BaseModel):
     # ------------------------------------------------------------------ #
     sweep_enabled: bool = False
     """Try multiple ablation methods & configs, pick the best."""
-    sweep_methods: list[str] = Field(default_factory=list)
-    """Candidate methods: advanced, bias_vectors, direct_ablation, lora.
-    Empty = single (base method)."""
-    sweep_dir_methods: list[str] = Field(default_factory=list)
-    """Candidate direction extraction: diff_means, svd, leace, whitened_svd.
-    Empty = single (base dir_method)."""
+    sweep_methods: list[str] = Field(
+        default_factory=lambda: ["advanced", "mpoa", "projected"]
+    )
+    """Candidate methods: advanced, mpoa (magnitude-preserving orthogonal
+    ablation — the LFM2.5 winning recipe), bias_vectors, direct_ablation,
+    projected, lora. Default includes advanced + mpoa + projected so the
+    sweep natively searches the MPOA space on any model."""
+    sweep_dir_methods: list[str] = Field(
+        default_factory=lambda: ["diff_means", "paired"]
+    )
+    """Candidate direction extraction: diff_means, paired (output-phase,
+    same-prompt refusal vs affirmative-prefill — the LFM2.5 winning recipe),
+    svd, leace, whitened_svd. Default includes diff_means + paired so the
+    sweep natively searches the paired space; probe_mode 'auto' collects
+    both activation types when 'paired' is in this list."""
     sweep_layer_sets: list[list[int]] = Field(default_factory=list)
     """Candidate layer sets, e.g. [[23,22],[23],[22]]. Empty = single (base)."""
     sweep_alphas: list[float] = Field(default_factory=list)
@@ -150,12 +159,16 @@ class ModelConfig(BaseModel):
     """Number of harmful/harmless prompts used in PROBE."""
     n_verify_prompts: int = 20
     """Number of harmful prompts used in VERIFY refusal-rate check."""
-    probe_mode: str = "input"
+    probe_mode: str = "auto"
     """Activation harvest mode: 'input' (last prompt token, harmful vs
-    harmless prompts) or 'paired' (output phase: unprimed refusal vs
-    affirmative-prefilled response on the SAME prompts). 'paired' matches
-    the successful LFM2.5 abliteration recipe — it removes the topic and
-    difficulty confounds of diff_means over different prompt sets."""
+    harmless prompts), 'paired' (output phase: unprimed refusal vs
+    affirmative-prefilled response on the SAME prompts), or 'auto' —
+    collect input-phase always, plus paired output-phase activations
+    whenever the sweep space (or base dir_method) includes 'paired'.
+    'paired' is the direction source of the successful LFM2.5 recipe; it
+    removes the topic/difficulty confound of diff_means over unrelated
+    prompt sets. Default 'auto' makes the sweep able to find the paired
+    recipe on any model without a hand-written config."""
     paired_prefill: str = "Sure, I can help with that."
     """Affirmative prefill appended to harmful prompts in 'paired' probe
     mode; the model continues from this compliant start."""

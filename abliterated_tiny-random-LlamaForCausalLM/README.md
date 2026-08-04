@@ -19,9 +19,9 @@ Abliterated version of [hf-internal-testing/tiny-random-LlamaForCausalLM](https:
 
 ## Method
 - Pipeline: SUMMON → PROBE → DISTILL → SWEEP → EXCISE → VERIFY → JUDGE → REBIRTH (LangGraph)
-- Method: mpoa (sweep-selected across advanced / bias_vectors / direct_ablation / projected / lora)
-- Direction extraction: paired, 3 directions
-- Projection strength α = 1.0, 1 pass(es)
+- Method: advanced (sweep-selected across advanced / bias_vectors / direct_ablation / projected / lora)
+- Direction extraction: diff_means, 3 directions
+- Projection strength α = 2.0, 1 pass(es)
 - Target layers: [0]
 - Target weights: ['o_proj']
 

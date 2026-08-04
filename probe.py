@@ -340,8 +340,20 @@ def probe_node(state: AbliterationState) -> dict:
     # (unprimed generation) vs affirmative-prefilled generation. This is the
     # direction source of the successful LFM2.5 abliteration — it removes the
     # topic/difficulty confound of input-phase diff_means over two prompt sets.
-    probe_mode = getattr(state["config"], "probe_mode", "input")
-    if probe_mode == "paired":
+    # 'auto' collects BOTH so the sweep can search diff_means vs paired.
+    probe_mode = getattr(state["config"], "probe_mode", "auto")
+    sweep_dir_methods = getattr(state["config"], "sweep_dir_methods", None) or []
+    wants_paired = (
+        probe_mode == "paired"
+        or (probe_mode == "auto" and (
+            "paired" in sweep_dir_methods
+            or getattr(state["config"], "dir_method", "diff_means") == "paired"
+        ))
+    )
+    paired_refusal_acts: dict[int, list[torch.Tensor]] = {}
+    paired_affirm_acts: dict[int, list[torch.Tensor]] = {}
+
+    if wants_paired:
         prefill = getattr(state["config"], "paired_prefill", "Sure, I can help with that.")
         max_new = getattr(state["config"], "paired_max_new_tokens", 64)
         if not hasattr(model, "generate"):
@@ -349,16 +361,20 @@ def probe_node(state: AbliterationState) -> dict:
                 "PROBE: probe_mode='paired' requires a generation-capable "
                 "model (CausalLM), but this model has no .generate()."
             )
-        refusal_acts, affirm_acts = _collect_paired_output_phase(
+        paired_refusal_acts, paired_affirm_acts = _collect_paired_output_phase(
             model, tok, harmful, layers, num_layers, device, prefill, max_new
         )
-        harm_acts = refusal_acts
-        harmless_acts = affirm_acts
         logger.info(
             "PROBE (paired): refusal_layers=%d affirm_layers=%d",
-            len(harm_acts),
-            len(harmless_acts),
+            len(paired_refusal_acts),
+            len(paired_affirm_acts),
         )
+
+    if probe_mode == "paired":
+        # Paired data replaces the input-phase sets (distill reads harm_acts/
+        # harmless_acts; the dir_method 'paired' just needs the contrast).
+        harm_acts = paired_refusal_acts
+        harmless_acts = paired_affirm_acts
     else:
         def run_set(prompts: list[str], store: dict[int, list[torch.Tensor]]) -> None:
             handles = [
@@ -401,6 +417,8 @@ def probe_node(state: AbliterationState) -> dict:
     return {
         "harm_acts": dict(harm_acts),
         "harmless_acts": dict(harmless_acts),
+        "paired_refusal_acts": dict(paired_refusal_acts),
+        "paired_affirm_acts": dict(paired_affirm_acts),
         "router_logits": router_logits,
         "harmful_prompts": harmful,
         "harmless_prompts": harmless,

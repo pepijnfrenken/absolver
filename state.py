@@ -48,6 +48,13 @@ class AbliterationState(TypedDict, total=False):
     """Per-layer stacked harmful activations [n_prompts, hidden]."""
     harmless_acts: dict[int, Any]
     """Per-layer stacked harmless activations."""
+    paired_refusal_acts: dict[int, Any]
+    """Per-layer output-phase refusal activations (same prompts, unprimed
+    generation). Collected when probe_mode is 'paired' or 'auto' with
+    'paired' in the sweep space."""
+    paired_affirm_acts: dict[int, Any]
+    """Per-layer output-phase affirmative-prefill activations (same prompts
+    as paired_refusal_acts)."""
     router_logits: dict[int, Any] | None
 
     # ------------------------------------------------------------------ #

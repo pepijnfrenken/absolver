@@ -69,6 +69,24 @@ def _build_candidates(cfg: Any, layer_types: list[str] | None = None) -> list[di
         t = layer_types[idx] if idx < len(layer_types) else None
         return t is not None and "conv" in str(t).lower()
 
+    # Auto-extend the layer space: when the sweep didn't specify layer sets,
+    # add the full attention-layer set (all non-conv layers) as a candidate.
+    # This is how the pipeline *finds* recipes like the LFM2.5 winner
+    # (mpoa x paired x [2,5,8,10,12,14] x alpha 2.0) without a hand-written
+    # config — the all-attention set is always tried when layer_types exist.
+    if layer_types and (not layer_sets or layer_sets == [[]]):
+        attention_idxs = [
+            i for i in range(len(layer_types))
+            if not _is_conv_layer(i)
+        ]
+        if attention_idxs:
+            layer_sets.append(attention_idxs)
+    elif not layer_sets or layer_sets == [[]]:
+        # Dense models without layer_types: fall back to the configured
+        # target_layers so an empty sweep space still searches something.
+        if getattr(cfg, "target_layers", None):
+            layer_sets = [list(cfg.target_layers)]
+
     grid = []
     for m, dm, ls, a, p, ws in itertools.product(
         methods, dir_methods, layer_sets, alphas, passes, weight_sets
@@ -461,6 +479,11 @@ def sweep_node(state: AbliterationState) -> dict[str, Any]:
     base_directions = state.get("refusal_directions", {})
     harm_acts = state.get("harm_acts") or {}
     harmless_acts = state.get("harmless_acts") or {}
+    # Paired output-phase activations (probe_mode auto/paired). dir_method
+    # 'paired' MUST use these, not the input-phase sets — that's the whole
+    # point of the recipe (same prompts, refusal vs affirmative-prefill).
+    paired_refusal = state.get("paired_refusal_acts") or {}
+    paired_affirm = state.get("paired_affirm_acts") or {}
 
     # Save pristine once — sweep restores between candidates, EXCISE gets it too.
     pristine = state.get("pristine_state_dict")
@@ -469,6 +492,25 @@ def sweep_node(state: AbliterationState) -> dict[str, Any]:
                     for k, v in model.state_dict().items()}
 
     grid = _build_candidates(cfg, layer_types=state.get("layer_types"))
+    # Filter candidates to dir_methods that have probe activations. With
+    # probe_mode='paired' only paired acts exist (diff_means candidates
+    # would silently reuse paired directions); with 'input'/'auto'-without-
+    # paired only input acts exist. An explicit mismatch is a config error —
+    # warn loudly instead of running garbage candidates.
+    available_dirs = {"diff_means", "svd", "leace", "whitened_svd"}
+    if paired_refusal and paired_affirm:
+        available_dirs.add("paired")
+    elif any(c["dir_method"] == "paired" for c in grid):
+        logger.warning(
+            "SWEEP: 'paired' dir_method requested but no paired probe "
+            "activations (probe_mode=%s); dropping paired candidates. "
+            "Set probe_mode: auto or paired to collect them.",
+            getattr(cfg, "probe_mode", "auto"),
+        )
+    filtered = [c for c in grid if c["dir_method"] in available_dirs]
+    if len(filtered) != len(grid):
+        logger.info("SWEEP: dropped %d candidate(s) with unavailable dir_method", len(grid) - len(filtered))
+    grid = filtered
     dropped = len(set(tuple(c["target_layers"]) for c in
                       _build_candidates(cfg))) - len(set(tuple(c["target_layers"]) for c in grid))
     if dropped > 0:
@@ -514,14 +556,21 @@ def sweep_node(state: AbliterationState) -> dict[str, Any]:
         t0 = time.perf_counter()
         dm = cand["dir_method"]
         if dm not in dir_cache:
-            if not harm_acts or not harmless_acts:
-                logger.warning("SWEEP: no probe activations to recompute dir_method=%s", dm)
+            # 'paired' consumes the output-phase paired activations; every
+            # other dir_method consumes the input-phase harm/harmless sets.
+            use_harm = paired_refusal if dm == "paired" else harm_acts
+            use_harmless = paired_affirm if dm == "paired" else harmless_acts
+            if not use_harm or not use_harmless:
+                logger.warning(
+                    "SWEEP: no probe activations for dir_method=%s "
+                    "(paired activations present: %s)", dm, bool(paired_refusal)
+                )
                 dir_cache[dm] = base_directions or {}
             else:
                 n_dirs = max(1, min(cfg.n_directions, state.get("hidden_size", 0) or cfg.n_directions))
                 if needs_good or cand["method"] == "projected":
                     dir_cache[dm], _, good_cache[dm] = extract_directions(
-                        harm_acts, harmless_acts,
+                        use_harm, use_harmless,
                         state.get("num_layers", 0),
                         state.get("hidden_size", 0),
                         dm, n_dirs,
@@ -530,7 +579,7 @@ def sweep_node(state: AbliterationState) -> dict[str, Any]:
                     )
                 else:
                     dir_cache[dm], _ = extract_directions(
-                        harm_acts, harmless_acts,
+                        use_harm, use_harmless,
                         state.get("num_layers", 0),
                         state.get("hidden_size", 0),
                         dm, n_dirs,
