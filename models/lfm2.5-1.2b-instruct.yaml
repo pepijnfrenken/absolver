@@ -42,6 +42,25 @@ judge_max_tokens: 200
 judge_refusal_threshold: 0.05
 judge_quality_threshold: 0.7
 
+# ---- Verification: match the ORIGINAL model's card benchmarks + behavior ----
+# Card numbers (ArtificialAnalysis methodology, full set):
+#   GPQA 38.89 | MMLU-Pro 44.35 | AIME25 14.00
+verify_benchmarks: [gpqa, mmlu_pro, aime]
+verify_benchmark_samples: 25
+model_card_targets:
+  gpqa: 38.89
+  mmlu_pro: 44.35
+  aime: 14.00
+# Run the SAME benchmarks on the pristine base → true capability-impact Δ
+# (static card numbers come from different eval setups).
+verify_pristine_baseline: true
+# Behavior battery: harmful-response classification (refusal/evasive/
+# compliant/garbage) + benign drift vs pristine (word overlap, openers).
+behavior_enabled: true
+n_behavior_harmful: 10
+n_behavior_benign: 10
+behavior_max_new_tokens: 96
+
 # SWEEP: methods x dir_methods x layer sets x alphas x passes x weights.
 # The winning recipe (mpoa, paired, all six attention, alpha 2.0, o_proj)
 # is IN the space so the sweep can find it — plus neighbors to confirm.
