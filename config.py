@@ -109,14 +109,67 @@ class ModelConfig(BaseModel):
     """Optional HF cache directory override."""
 
     # ------------------------------------------------------------------ #
+    # Sweep — search the ablation space instead of trusting one config.
+    # ------------------------------------------------------------------ #
+    sweep_enabled: bool = False
+    """Try multiple ablation methods & configs, pick the best."""
+    sweep_methods: list[str] = Field(default_factory=list)
+    """Candidate methods: advanced, bias_vectors, direct_ablation, lora.
+    Empty = single (base method)."""
+    sweep_dir_methods: list[str] = Field(default_factory=list)
+    """Candidate direction extraction: diff_means, svd, leace, whitened_svd.
+    Empty = single (base dir_method)."""
+    sweep_layer_sets: list[list[int]] = Field(default_factory=list)
+    """Candidate layer sets, e.g. [[23,22],[23],[22]]. Empty = single (base)."""
+    sweep_alphas: list[float] = Field(default_factory=list)
+    """Candidate alphas, e.g. [0.2, 0.5]. Empty = single (base alpha)."""
+    sweep_passes: list[int] = Field(default_factory=list)
+    """Candidate pass counts, e.g. [1, 2]. Empty = single (base passes)."""
+    sweep_target_weights: list[list[str]] = Field(default_factory=list)
+    """Optional per-candidate target weights. Empty = base target_weights."""
+    sweep_refusal_weight: float = 1.0
+    """Objective weight on keeping refusal low (subtracted)."""
+    sweep_quality_weight: float = 1.0
+    """Objective weight on response quality (added)."""
+    sweep_judge_enabled: bool = True
+    """Re-score top sweep candidates with the real LLM judge before picking."""
+    sweep_judge_finalists: int = 5
+    """How many keyword-top candidates get LLM-judge re-scored."""
+    sweep_judge_prompts: int = 5
+    """How many harmful prompts to LLM-judge per finalist."""
+    sweep_kl_quality: bool = True
+    """Use Heretic-style KL divergence vs pristine model as the quality
+    metric (capability-damage proxy) instead of response length."""
+    sweep_kl_topk: int = 128
+    """Vocab positions to compare in the KL divergence (top-K by base prob)."""
+
+    # ------------------------------------------------------------------ #
     # Probe / verify sizing
     # ------------------------------------------------------------------ #
     n_probe_prompts: int = 20
     """Number of harmful/harmless prompts used in PROBE."""
     n_verify_prompts: int = 20
     """Number of harmful prompts used in VERIFY refusal-rate check."""
+    probe_mode: str = "input"
+    """Activation harvest mode: 'input' (last prompt token, harmful vs
+    harmless prompts) or 'paired' (output phase: unprimed refusal vs
+    affirmative-prefilled response on the SAME prompts). 'paired' matches
+    the successful LFM2.5 abliteration recipe — it removes the topic and
+    difficulty confounds of diff_means over different prompt sets."""
+    paired_prefill: str = "Sure, I can help with that."
+    """Affirmative prefill appended to harmful prompts in 'paired' probe
+    mode; the model continues from this compliant start."""
+    paired_max_new_tokens: int = 64
+    """Response length generated per prompt in 'paired' probe mode."""
     verify_sample_size: int = 0
     """MMLU-mini sample size (0 = skip MMLU)."""
+    verify_benchmarks: list[str] = Field(default_factory=list)
+    """Optional override list. Empty = auto-derive benchmark set from
+    model_card_targets keys that have a registered runner."""
+    verify_benchmark_samples: int = 25
+    """Per-benchmark sample size when using built-in subsets."""
+    model_card_targets: dict[str, float] = Field(default_factory=dict)
+    """Optional dict of {benchmark_name: target_score} for verdict comparison."""
 
     # ------------------------------------------------------------------ #
     # Evaluation thresholds
@@ -132,12 +185,14 @@ class ModelConfig(BaseModel):
     eval_dataset: str | None = None
 
     # ------------------------------------------------------------------ #
-    # Judge (LLM-as-judge via OMP subprocess)
+    # Judge (LLM-as-judge via direct OpenAI-compatible API call)
     # ------------------------------------------------------------------ #
     judge_enabled: bool = False
     """Enable the LLM-as-judge VERIFY stage."""
-    judge_model: str = "default"
-    """Model id used for adversarial judging (passed to `omp --model`)."""
+    judge_model: str = "deepseek-v4-flash"
+    """Model id used for adversarial judging (chat-completions `model`)."""
+    judge_base_url: str = "https://freeinference.org/v1"
+    """OpenAI-compatible base URL for the judge endpoint."""
     judge_prompts: int = 20
     """Number of prompts to send to the judge."""
     judge_refusal_threshold: float = 0.3
@@ -150,6 +205,9 @@ class ModelConfig(BaseModel):
     """Maximum tokens generated per judge response."""
     judge_api_key: str | None = None
     """API key for the judge endpoint (else pulled from env)."""
+    prompt_format: str = "auto"
+    """How to format prompts for generation: auto/chat/raw/thinking.
+    Auto detects from the tokenizer (chat template, thinking tokens)."""
 
     # ------------------------------------------------------------------ #
     # Reflexion (KB-grounded strategy retry)
@@ -239,6 +297,10 @@ def load_config(path: str | Path) -> ModelConfig:
         pydantic.ValidationError: if the parsed data fails validation.
     """
     p = Path(path)
+    # Resolve relative paths against the absolver package root so configs
+    # work on Modal (where CWD is /root/, not /absolver).
+    if not p.is_absolute():
+        p = (Path(__file__).resolve().parent / p).resolve()
     try:
         with p.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f)

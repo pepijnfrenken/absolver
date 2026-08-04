@@ -7,6 +7,8 @@ through DISTILL and EXCISE, then asserts:
 - all four dir_method options run without error
 """
 from __future__ import annotations
+from model_registry import set_model
+from model_registry import get_model
 
 import pytest
 import torch
@@ -70,6 +72,8 @@ def toy_state():
     torch.manual_seed(0)
     n_layers, hidden = 8, 64
     model = _ToyModel(n_layers, hidden)
+    from model_registry import set_model
+    set_model(model)
 
     # Build activations with a planted refusal direction on every layer.
     # harm acts cluster around +d, harmless acts around -d.
@@ -96,7 +100,7 @@ def toy_state():
 
     return {
         "config": cfg,
-        "model_obj": model,
+        "model_loaded": True,
         "architecture": "dense",
         "hidden_size": hidden,
         "num_layers": n_layers,
@@ -159,7 +163,7 @@ class TestExcise:
         return snap
 
     def test_weights_actually_change_on_target_layers(self, toy_state):
-        model = toy_state["model_obj"]
+        model = get_model()
         before = self._snapshot(model)
 
         distilled = distill_node(toy_state)
@@ -177,7 +181,7 @@ class TestExcise:
             assert not torch.allclose(before[i]["down_proj"], after[i]["down_proj"])
 
     def test_non_target_layers_untouched(self, toy_state):
-        model = toy_state["model_obj"]
+        model = get_model()
         before = self._snapshot(model)
 
         distilled = distill_node(toy_state)
@@ -211,7 +215,7 @@ class TestExcise:
         toy_state["target_layers"] = [0]
         toy_state["config"] = toy_state["config"].model_copy(update={"alpha": 1.0})
 
-        model = toy_state["model_obj"]
+        model = get_model()
         layer0 = model.model.layers[0]
         direction = distilled["refusal_directions"][0]
         direction = direction.to(layer0.self_attn.o_proj.weight.dtype)

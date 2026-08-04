@@ -71,12 +71,26 @@ def _build_image():
             "huggingface-hub>=0.20",
             "numpy>=1.24",
         )
+        .add_local_dir(
+            str(_PROJECT_DIR), remote_path="/absolver",
+            ignore=[".venv", ".git", "__pycache__", "*.pyc", ".aiwg",
+                    ".pytest_cache", ".mypy_cache", ".ruff_cache",
+                    "abliterated_models", "experiments"],
+        )
         .env({"PYTHONPATH": "/absolver"})
     )
 
 
 def _make_mount(modal):
-    return modal.Mount.from_local_dir(_PROJECT_DIR, remote_path="/absolver")
+    return modal.Mount.from_local_dir(
+        _PROJECT_DIR, remote_path="/absolver",
+        # Exclude heavy/generated directories from Modal upload
+        condition=lambda p: not any(
+            p.startswith(str(_PROJECT_DIR / d)) for d in
+            [".venv", ".git", "__pycache__", ".aiwg", ".pytest_cache",
+             ".mypy_cache", ".ruff_cache", "abliterated_models", "experiments"]
+        )
+    )
 
 
 def _create_app() -> object:
@@ -87,7 +101,6 @@ def _create_app() -> object:
     import modal
 
     image = _build_image()
-    mount = _make_mount(modal)
     gpu = os.environ.get("ABSOLVER_GPU", "L4")
     timeout = int(os.environ.get("ABSOLVER_TIMEOUT", "7200"))
 
@@ -98,8 +111,7 @@ def _create_app() -> object:
         gpu=gpu,
         timeout=timeout,
         retries=0,
-        mounts=[mount],
-        secrets=[modal.Secret.from_name("huggingface-token", required=False)],
+        secrets=[modal.Secret.from_name("huggingface-token")],
     )
     def run_pipeline_modal_fn(config_path: str) -> dict:
         """Run the Absolver pipeline on Modal GPU."""

@@ -56,6 +56,9 @@ class AbliterationState(TypedDict, total=False):
     refusal_directions: dict[int, Any]
     """Per-layer refusal direction (1D or [n_dirs, hidden])."""
     separation_scores: dict[int, float]
+    dir_method: str
+    """Direction extraction method actually used ('diff_means', 'paired',
+    'svd', 'leace', 'whitened_svd'). Selected by SWEEP."""
     target_layers: list[int]
 
     # ------------------------------------------------------------------ #
@@ -68,7 +71,18 @@ class AbliterationState(TypedDict, total=False):
     """Saved model state dict before first EXCISE pass, for restoration on
     retry. Prevents cumulative weight damage across ouroboros loops."""
     alpha: float
-    """Effective alpha (may be tuned by REFLEXION)."""
+    """Effective alpha (may be tuned by REFLEXION or selected by SWEEP)."""
+    method: str
+    """Effective ablation method ('advanced', 'mpoa', 'bias_vectors',
+    'direct_ablation', 'projected', 'lora'). Selected by SWEEP, may be
+    tuned by REFLEXION; EXCISE honors it."""
+    sweep_results: list[dict[str, Any]]
+    """Per-candidate sweep outcomes (method, dir, layers, alpha, refusal,
+    quality, kl, objective, elapsed)."""
+    sweep_finalists: list[dict[str, Any]]
+    """Top candidates re-scored by the LLM judge during the sweep."""
+    sweep_best: dict[str, Any]
+    """The sweep winner dict (params EXCISE applies)."""
 
     # ------------------------------------------------------------------ #
     # VERIFY
@@ -76,6 +90,8 @@ class AbliterationState(TypedDict, total=False):
     refusal_rate: float
     ouroboros_count: int
     mmlu_score: float | None
+    benchmark_scores: dict[str, float]
+    """Per-benchmark scores from the extended VERIFY run (model-card derived)."""
     quality_pass: bool
 
     # ------------------------------------------------------------------ #

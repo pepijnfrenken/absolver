@@ -1,0 +1,79 @@
+# LiquidAI LFM2.5-1.2B-Instruct — non-thinking instruct model.
+# Same 16-layer hybrid LFM2 arch, but answers directly (no reasoning trace),
+# so the LLM judge can score it cleanly. Proven abliteration target (user
+# already has an Instruct abliteration on HF).
+model_id: LiquidAI/LFM2.5-1.2B-Instruct
+model_arch: dense
+dtype: bfloat16
+device: auto
+trust_remote_code: true
+
+method: mpoa
+dir_method: paired
+n_directions: 3
+alpha: 2.0
+passes: 2
+# Attention-only layers (LFM2 hybrid: conv layers must not be projected).
+# The winning HF recipe (LFM2.5-1.2B-Instruct-Abliterated-Paired-Alpha2)
+# ablates ALL SIX full-attention blocks at alpha 2.0 on out_proj only.
+target_layers: [2, 5, 8, 10, 12, 14]
+target_weights: [o_proj]
+
+# Paired output-phase probe: same harmful prompts in both groups, unprimed
+# refusal vs affirmative-prefill generation. This is the direction source
+# that actually worked on this model (diff_means over unrelated prompts did
+# not — refusal stayed at 95%).
+probe_mode: paired
+paired_prefill: "Sure, I can help with that."
+paired_max_new_tokens: 64
+
+# Instruct tokenizer likely has a chat template -> auto-detect handles it.
+prompt_format: "auto"
+
+n_probe_prompts: 20
+n_verify_prompts: 20
+max_seq_len: 1024
+
+# LLM-as-judge via direct API (FreeInference, OpenAI-compatible).
+judge_model: "deepseek-v4-flash"
+judge_base_url: "https://freeinference.org/v1"
+judge_enabled: true
+judge_max_tokens: 200
+judge_refusal_threshold: 0.05
+judge_quality_threshold: 0.7
+
+# SWEEP: methods x dir_methods x layer sets x alphas x passes x weights.
+# The winning recipe (mpoa, paired, all six attention, alpha 2.0, o_proj)
+# is IN the space so the sweep can find it — plus neighbors to confirm.
+sweep_enabled: true
+sweep_methods:
+  - "mpoa"
+  - "advanced"
+  - "projected"
+sweep_dir_methods:
+  - "paired"
+  - "diff_means"
+# LFM2.5 is a hybrid arch — layer_types = [conv, conv, full_attention, conv, ...].
+# ONLY full_attention layers (2, 5, 8, 10, 12, 14) have hidden-shaped weights;
+# conv layers must never be projected. Layer sets below target attention only.
+# [12,14] omitted — dominated by the all-six set; alpha 0.5 omitted — proven
+# insufficient on this model (refusal stayed 95%).
+sweep_layer_sets:
+  - [14]
+  - [10, 12, 14]
+  - [2, 5, 8, 10, 12, 14]
+sweep_alphas: [1.0, 2.0]
+sweep_passes: [1, 2]
+# Winning recipe projects out_proj ONLY (no down_proj) — include both options.
+sweep_target_weights:
+  - [o_proj]
+  - [o_proj, down_proj]
+# Re-score the top 5 keyword winners with the real LLM judge (5 prompts each).
+sweep_judge_enabled: true
+sweep_judge_finalists: 5
+sweep_judge_prompts: 5
+sweep_kl_quality: true
+sweep_kl_topk: 128
+
+push_to_hub: PinoCookie/LFM2.5-1.2B-Instruct-Abliterated
+hub_private: false

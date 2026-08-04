@@ -1,0 +1,24 @@
+model_id: "hf-internal-testing/tiny-random-LlamaForCausalLM"
+model_arch: "dense"
+dtype: "float32"
+device: "cpu"
+n_directions: 2
+method: mpoa
+dir_method: paired
+probe_mode: paired
+paired_prefill: "Sure, I can help with that."
+paired_max_new_tokens: 8
+alpha: 2.0
+passes: 1
+target_layers: [0]
+target_weights: [o_proj]
+n_probe_prompts: 3
+n_verify_prompts: 3
+batch_size: 2
+max_seq_len: 128
+separation_threshold: 0.001
+ouroboros_threshold: 10.0
+max_ouroboros_passes: 1
+reflexion_enabled: false
+judge_enabled: false
+push_to_hub: null

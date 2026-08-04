@@ -1,0 +1,70 @@
+model_id: "openbmb/MiniCPM5-1B"
+model_arch: "dense"
+dtype: "float16"
+device: "auto"
+trust_remote_code: true
+n_directions: 3
+n_probe_prompts: 40
+n_verify_prompts: 40
+alpha: 0.5
+passes: 2
+target_layers: []
+target_weights: ["o_proj", "down_proj"]
+batch_size: 4
+max_seq_len: 2048
+separation_threshold: 3.0
+ouroboros_threshold: 0.5
+max_ouroboros_passes: 2
+reflexion_enabled: true
+judge_enabled: true
+# LLM-as-judge via direct API (FreeInference, OpenAI-compatible).
+judge_model: "deepseek-v4-flash"
+judge_base_url: "https://freeinference.org/v1"
+# Cap judge generations so the model answers concisely instead of rambling
+# into incoherence (MiniCPM5 is a 1B thinking model; 1024 tokens = garbage).
+judge_max_tokens: 200
+# Auto-detect prompt format from the tokenizer (chat template / thinking
+# tokens). Set to "raw" for plain base models, "chat" to force template.
+prompt_format: "auto"
+# SWEEP: try multiple ablation methods & configs, pick the best instead of
+# trusting a single hardcoded config. Candidates = methods x dir_methods
+# x layer_sets x alphas x passes.
+sweep_enabled: true
+sweep_methods:
+  - "advanced"
+  - "bias_vectors"
+  - "direct_ablation"
+  - "projected"
+  - "lora"
+sweep_dir_methods:
+  - "diff_means"
+sweep_layer_sets:
+  - [23, 22]
+  - [23]
+  - [23, 22, 21]
+  - [22]
+sweep_alphas: [0.2, 0.5]
+sweep_passes: [1, 2]
+# Re-score the top 5 keyword winners with the real LLM judge (5 prompts each)
+# so the sweep optimizes what actually gates the push, not the keyword proxy.
+sweep_judge_enabled: true
+sweep_judge_finalists: 5
+sweep_judge_prompts: 5
+verify_sample_size: 50
+# Official OpenBMB MiniCPM5-1B model-card targets (thinking mode).
+# VERIFY auto-derives its benchmark set from these keys; benchmarks with a
+# registered runner are run, the rest are logged as skipped.
+model_card_targets:
+  bbh: 71.9
+  mmlu: 70.1
+  mmlu_pro: 48.9
+  gpqa: 26.3
+  math: 91.6
+  aime: 40.4
+  refusal: 5.0
+platform: "modal"
+modal_gpu: "L4"
+modal_timeout: 3600
+push_to_hub: "PinoCookie/MiniCPM5-1B-abliterated"
+hub_private: false
+

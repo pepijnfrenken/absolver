@@ -49,6 +49,35 @@ def _diff_means(
     return direction, score
 
 
+def _paired(
+    harm_stack: torch.Tensor,
+    harmless_mean: torch.Tensor,
+    hidden: int,
+    n_dirs: int,
+    device: str,
+):
+    """Paired output-phase direction (same prompts, refusal vs affirmative).
+
+    Identical math to diff_means (mean refusal activation minus mean
+    affirmative-prefill activation) but the *data* comes from the paired
+    probe mode: the same harmful prompts in both groups, with the compliant
+    group generated from an affirmative-prefilled continuation. This kills
+    the topic/difficulty confound that diff_means suffers when the two
+    groups use different prompts (see LFM2.5 research notes).
+
+    Score is the L2 norm of the paired mean difference — higher = the
+    refusal/compliance contrast is more separated in that layer.
+    """
+    del n_dirs, hidden
+    r = harm_stack.mean(dim=0).to(device)
+    a = harmless_mean.to(device)
+    d = r - a
+    norm = d.norm() + 1e-8
+    direction = d / norm
+    score = norm.item()
+    return direction, score
+
+
 def _svd(
     harm_stack: torch.Tensor,
     harmless_mean: torch.Tensor,
@@ -147,6 +176,73 @@ def _whitened_svd(
     return direction, score
 
 
+def extract_directions(
+    harm_acts: dict[int, Any],
+    harmless_acts: dict[int, Any],
+    num_layers: int,
+    hidden: int,
+    dir_method: str,
+    n_dirs: int,
+    device: str,
+    return_good_dirs: bool = False,
+) -> tuple[dict[int, torch.Tensor], dict[int, float]] | tuple[dict[int, torch.Tensor], dict[int, float], dict[int, torch.Tensor]]:
+    """Compute per-layer refusal directions using the given dir_method.
+
+    Returns (directions, separation_scores). Shared by DISTILL and the
+    SWEEP node (which recomputes directions per candidate dir_method).
+
+    When ``return_good_dirs=True``, the harmless mean (normalized) is also
+    returned per layer — used by projected-abliteration (orthogonalize the
+    refusal direction against the harmless direction so capabilities that
+    overlap refusal are preserved, per Lai/grimjim + Heretic).
+    """
+    directions: dict[int, torch.Tensor] = {}
+    scores: dict[int, float] = {}
+    good_dirs: dict[int, torch.Tensor] = {}
+
+    layer_indices: list[int] = (
+        list(range(num_layers)) if num_layers else sorted(set(harm_acts) | set(harmless_acts))
+    )
+
+    for i in layer_indices:
+        h_list = harm_acts.get(i)
+        b_list = harmless_acts.get(i)
+        if not h_list or not b_list:
+            continue
+
+        harm_stack = torch.stack(h_list).to(torch.float32)
+        harmless_stack = torch.stack(b_list).to(torch.float32)
+        harmless_mean = harmless_stack.mean(dim=0)
+
+        try:
+            if dir_method == "diff_means":
+                d, s = _diff_means(harm_stack, harmless_mean, hidden, n_dirs, device)
+            elif dir_method == "paired":
+                d, s = _paired(harm_stack, harmless_mean, hidden, n_dirs, device)
+            elif dir_method == "svd":
+                d, s = _svd(harm_stack, harmless_mean, hidden, n_dirs, device)
+            elif dir_method == "leace":
+                d, s = _leace(harm_stack, harmless_stack, hidden, n_dirs, device)
+            elif dir_method == "whitened_svd":
+                d, s = _whitened_svd(harm_stack, harmless_stack, hidden, n_dirs, device)
+            else:
+                logger.warning("Unknown dir_method '%s'; falling back to diff_means.", dir_method)
+                d, s = _diff_means(harm_stack, harmless_mean, hidden, n_dirs, device)
+        except Exception as exc:
+            logger.warning("dir_method '%s' failed on layer %d (%s); skipping.", dir_method, i, exc)
+            continue
+
+        directions[i] = d
+        scores[i] = float(s)
+        if return_good_dirs:
+            norm = harmless_mean.norm().clamp(min=1e-8)
+            good_dirs[i] = (harmless_mean / norm).to(device)
+
+    if return_good_dirs:
+        return directions, scores, good_dirs
+    return directions, scores
+
+
 def distill_node(state: AbliterationState) -> dict:
     """Extract per-layer refusal directions and pick target layers.
 
@@ -167,41 +263,9 @@ def distill_node(state: AbliterationState) -> dict:
     dir_method: str = cfg.dir_method
     n_dirs = max(1, min(cfg.n_directions, hidden)) if hidden else cfg.n_directions
 
-    directions: dict[int, torch.Tensor] = {}
-    scores: dict[int, float] = {}
-
-    layer_indices: list[int] = (
-        list(range(num_layers)) if num_layers else sorted(set(harm_acts) | set(harmless_acts))
+    directions, scores = extract_directions(
+        harm_acts, harmless_acts, num_layers, hidden, dir_method, n_dirs, device
     )
-
-    for i in layer_indices:
-        h_list = harm_acts.get(i)
-        b_list = harmless_acts.get(i)
-        if not h_list or not b_list:
-            continue
-
-        harm_stack = torch.stack(h_list).to(torch.float32)
-        harmless_stack = torch.stack(b_list).to(torch.float32)
-        harmless_mean = harmless_stack.mean(dim=0)
-
-        try:
-            if dir_method == "diff_means":
-                d, s = _diff_means(harm_stack, harmless_mean, hidden, n_dirs, device)
-            elif dir_method == "svd":
-                d, s = _svd(harm_stack, harmless_mean, hidden, n_dirs, device)
-            elif dir_method == "leace":
-                d, s = _leace(harm_stack, harmless_stack, hidden, n_dirs, device)
-            elif dir_method == "whitened_svd":
-                d, s = _whitened_svd(harm_stack, harmless_stack, hidden, n_dirs, device)
-            else:
-                logger.warning("Unknown dir_method '%s'; falling back to diff_means.", dir_method)
-                d, s = _diff_means(harm_stack, harmless_mean, hidden, n_dirs, device)
-        except Exception as exc:
-            logger.warning("dir_method '%s' failed on layer %d (%s); skipping.", dir_method, i, exc)
-            continue
-
-        directions[i] = d
-        scores[i] = float(s)
 
     # Rank layers by separation score, descending.
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)

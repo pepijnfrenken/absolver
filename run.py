@@ -18,6 +18,12 @@ from graph import build_abliteration_graph  # noqa: E402
 
 
 def main() -> None:
+    # Modal injects "run" and script-name as positional args — strip them
+    # to avoid argparse clash when used as a Modal local_entrypoint.
+    argv = sys.argv[1:]
+    if argv and ("modal" in sys.argv[0] or argv[0] == "run"):
+        argv = [a for a in argv if a not in ("run",) and not a.endswith(".py")]
+
     parser = argparse.ArgumentParser(
         description="Absolver - LangGraph Abliteration Pipeline"
     )

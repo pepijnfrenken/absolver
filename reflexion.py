@@ -2,15 +2,14 @@
 
 When the pipeline stalls (low separation, high refusal, or poor quality),
 this node picks the next strategy from ``ModelConfig.reflexion_strategy_space``,
-optionally consults a knowledge base via an OMP LLM, and routes the flow
-to the appropriate downstream node (probe / distill / excise / rebirth).
+optionally consults a knowledge base via a direct LLM API call, and routes
+the flow to the appropriate downstream node (probe / distill / excise / rebirth).
 """
 from __future__ import annotations
 
 import os
-import subprocess
-import tempfile
 
+from llm_api import chat_completion
 from prompts import REFLEXION_KB_PROMPT_TEMPLATE
 from state import AbliterationState
 
@@ -117,24 +116,15 @@ def reflexion_node(state: AbliterationState) -> dict:
             kb_prompt = None
         if kb_prompt:
             try:
-                with tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".txt", delete=False
-                ) as f:
-                    f.write(kb_prompt)
-                    tmp_name = f.name
-                try:
-                    r = subprocess.run(
-                        ["omp", "-p", "--model", cfg.judge_model, f"@{tmp_name}"],
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                    )
-                    kb_llm = r.stdout[:500] if r.stdout else None
-                finally:
-                    try:
-                        os.unlink(tmp_name)
-                    except OSError:
-                        pass
+                kb_llm = chat_completion(
+                    kb_prompt,
+                    model=getattr(cfg, "judge_model", None) or "deepseek-v4-flash",
+                    base_url=getattr(cfg, "judge_base_url", None) or "https://freeinference.org/v1",
+                    api_key=getattr(cfg, "judge_api_key", None) or None,
+                    max_tokens=500,
+                    temperature=0.0,
+                    timeout=45,
+                )[:500] or None
             except Exception:
                 kb_llm = None
 

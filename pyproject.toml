@@ -1,3 +1,6 @@
+[tool.setuptools.packages.find]
+include = ["absolver", "absolver.*"]
+
 [project]
 name = "absolver"
 version = "0.1.0"

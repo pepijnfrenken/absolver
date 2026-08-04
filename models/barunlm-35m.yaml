@@ -1,0 +1,20 @@
+model_id: "/home/pino/models/BarunLM-35M"
+model_arch: "dense"
+dtype: "float32"
+device: "cpu"
+trust_remote_code: true
+n_directions: 2
+n_probe_prompts: 8
+n_verify_prompts: 8
+alpha: 0.5
+passes: 1
+target_layers: []
+target_weights: ["o_proj", "down_proj"]
+batch_size: 2
+max_seq_len: 256
+separation_threshold: 3.0
+ouroboros_threshold: 0.8
+max_ouroboros_passes: 1
+reflexion_enabled: false
+judge_enabled: false
+push_to_hub: null

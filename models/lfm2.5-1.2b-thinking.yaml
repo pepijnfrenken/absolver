@@ -1,0 +1,58 @@
+# LiquidAI LFM2.5-1.2B-Thinking — 16-layer hybrid (conv + full_attention),
+# hidden 2048, bf16, custom lfm2 arch. Has actual alignment to remove.
+model_id: LiquidAI/LFM2.5-1.2B-Thinking
+model_arch: dense
+dtype: bfloat16
+device: auto
+trust_remote_code: true
+
+method: advanced
+dir_method: diff_means
+n_directions: 3
+alpha: 0.5
+passes: 2
+# Attention-only layers (LFM2 hybrid: conv layers must not be projected).
+target_layers: [14]
+target_weights: [o_proj, down_proj]
+
+# No chat template / thinking tokens on this tokenizer -> raw prompts.
+prompt_format: "auto"
+
+n_probe_prompts: 20
+n_verify_prompts: 20
+max_seq_len: 1024
+
+# LLM-as-judge via direct API (FreeInference, OpenAI-compatible).
+judge_model: "deepseek-v4-flash"
+judge_base_url: "https://freeinference.org/v1"
+judge_enabled: true
+judge_max_tokens: 200
+judge_refusal_threshold: 0.05
+judge_quality_threshold: 0.7
+
+# SWEEP: 5 methods x 3 layer sets x 2 alphas x 2 passes = 60 candidates.
+sweep_enabled: true
+sweep_methods:
+  - "advanced"
+  - "bias_vectors"
+  - "direct_ablation"
+  - "projected"
+  - "lora"
+sweep_dir_methods:
+  - "diff_means"
+sweep_layer_sets:
+  - [14]
+  - [12, 14]
+  - [10, 12, 14]
+sweep_alphas: [0.2, 0.5]
+sweep_passes: [1, 2]
+# Re-score the top 5 keyword winners with the real LLM judge (5 prompts each).
+sweep_judge_enabled: true
+sweep_judge_finalists: 5
+sweep_judge_prompts: 5
+sweep_kl_quality: true
+sweep_kl_topk: 128
+
+# Updates the existing repo (same name as the previous push).
+push_to_hub: PinoCookie/LFM2.5-1.2B-Thinking-Abliterated
+hub_private: false

@@ -5,6 +5,7 @@ direction from a model's o_proj / down_proj / per-expert down weights.
 Works for dense, MoE, and diffusion-encoder (text encoder) architectures.
 """
 from __future__ import annotations
+from model_registry import get_model
 
 import logging
 from typing import Any
@@ -55,17 +56,62 @@ def _project_2d(weight: torch.Tensor, d: torch.Tensor, alpha: float) -> None:
 
     ``W -= alpha * d (d^T W)`` via the einsum ``i,j->ij``.
     Raises a clear error if the tensor is quantized (4/8-bit) and cannot
-    be mutated in place.
+    be mutated in place. The original exception is chained so real bugs
+    (device/dtype mismatch, shape issues) are visible, not masked.
     """
-    d = d.to(dtype=weight.dtype)
+    d = d.to(dtype=weight.dtype, device=weight.device)
+    if weight.dim() != 2 or d.shape[0] != weight.shape[1]:
+        # Hybrid architectures (LFM conv layers, fused projections) can
+        # expose weights whose input dim != hidden. Skip rather than corrupt.
+        return
     try:
         weight.sub_(alpha * torch.einsum("i,j->ij", d, d @ weight))
     except RuntimeError as exc:
+        if "quantized" in str(exc).lower() or "bitsandbytes" in str(exc).lower():
+            raise RuntimeError(
+                "EXCISE: in-place weight modification failed — the model appears "
+                "to be quantized (4-bit / 8-bit). Refusal-direction projection "
+                "requires dequantized (fp16/bf16/fp32) weights. Re-load the model "
+                "without `quantize` before running the pipeline."
+            ) from exc
         raise RuntimeError(
-            "EXCISE: in-place weight modification failed — the model appears "
-            "to be quantized (4-bit / 8-bit). Refusal-direction projection "
-            "requires dequantized (fp16/bf16/fp32) weights. Re-load the model "
-            "without `quantize` before running the pipeline."
+            f"EXCISE: in-place weight projection failed: {exc} "
+            f"(weight {tuple(weight.shape)} {weight.dtype} {weight.device}, "
+            f"d {tuple(d.shape)} {d.dtype} {d.device})"
+        ) from exc
+
+
+def _project_2d_mpoa(weight: torch.Tensor, d: torch.Tensor, alpha: float) -> None:
+    """Magnitude-preserving orthogonal ablation (MPOA) on a 2D weight.
+
+    ``W -= alpha * d (d^T W)`` like ``_project_2d``, then rescales the whole
+    matrix back to its original Frobenius norm. This is the variant used by
+    the successful LFM2.5 abliteration on PinoCookie (alpha 2.0, all six
+    attention blocks): it removes the refusal direction without collapsing
+    the layer's output scale, so high alphas (>= 1.0) stay usable.
+
+    The rescale uses the *global* norm before/after so the projection is
+    purely directional (the removed mass is not silently amplified).
+    """
+    d = d.to(dtype=weight.dtype, device=weight.device)
+    if weight.dim() != 2 or d.shape[0] != weight.shape[1]:
+        return
+    try:
+        orig_norm = weight.norm().clamp(min=1e-8)
+        weight.sub_(alpha * torch.einsum("i,j->ij", d, d @ weight))
+        new_norm = weight.norm().clamp(min=1e-8)
+        weight.mul_(orig_norm / new_norm)
+    except RuntimeError as exc:
+        if "quantized" in str(exc).lower() or "bitsandbytes" in str(exc).lower():
+            raise RuntimeError(
+                "EXCISE: in-place weight modification failed — the model appears "
+                "to be quantized (4-bit / 8-bit). MPOA requires dequantized "
+                "(fp16/bf16/fp32) weights. Re-load the model without `quantize`."
+            ) from exc
+        raise RuntimeError(
+            f"EXCISE: in-place MPOA projection failed: {exc} "
+            f"(weight {tuple(weight.shape)} {weight.dtype} {weight.device}, "
+            f"d {tuple(d.shape)} {d.dtype} {d.device})"
         ) from exc
 
 
@@ -84,8 +130,29 @@ def _project_3d_expert(weight: torch.Tensor, d: torch.Tensor, alpha: float) -> N
         ) from exc
 
 
+def _project_3d_expert_mpoa(weight: torch.Tensor, d: torch.Tensor, alpha: float) -> None:
+    """Magnitude-preserving orthogonal ablation on a 3D per-expert weight."""
+    try:
+        orig_norm = weight.norm().clamp(min=1e-8)
+        proj = torch.einsum("eij,i->ej", weight, d)
+        proj = torch.einsum("i,ej->eij", d, proj)
+        weight.sub_(alpha * proj)
+        new_norm = weight.norm().clamp(min=1e-8)
+        weight.mul_(orig_norm / new_norm)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "EXCISE: in-place expert MPOA failed — the model appears to be "
+            "quantized (4-bit / 8-bit). MPOA requires dequantized weights."
+        ) from exc
+
+
 def excise_node(state: AbliterationState) -> dict[str, Any]:
     """Project the refusal direction out of the model's weights in place.
+
+    Honors sweep/reflexion-selected overrides: ``method`` (plain projection
+    or MPOA), ``alpha``, ``target_layers``, ``target_weights``. Previously
+    the node always used the base config's alpha and plain projection, so a
+    sweep winner's alpha/method was silently discarded (P0-6).
 
     Returns a partial state dict with:
       - ``projection_applied``: True
@@ -93,13 +160,22 @@ def excise_node(state: AbliterationState) -> dict[str, Any]:
       - ``excise_history``: appended history entries for this pass
       - ``pristine_state_dict``: saved before first excise pass for restoration
     """
-    model = state["model_obj"]
+    model = get_model()
     arch = state["architecture"]
     directions = state["refusal_directions"]
     target_layers = state.get("target_layers", [])
     target_weights = state.get("target_weights", [])
-    alpha = state["config"].alpha
+    # Honor sweep/reflexion overrides; fall back to config values.
+    method = state.get("method") or state["config"].method
+    alpha = state.get("alpha", state["config"].alpha)
     passes_completed = state.get("passes_completed", 0) + 1
+
+    _log.info(
+        "EXCISE pass %d: method=%s alpha=%.2f layers=%s weights=%s",
+        passes_completed, method, alpha, target_layers, target_weights,
+    )
+
+    mpoa = str(method).lower() == "mpoa"
 
     # Save pristine model state before the FIRST excise pass so retries
     # (cumulative weight damage from earlier passes) can restore it later.
@@ -172,25 +248,41 @@ def excise_node(state: AbliterationState) -> dict[str, Any]:
 
         # --- o_proj (attention output) ---
         # Try both self_attn.o_proj and linear_attn.out_proj; Qwen3.5 hybrid
-        # layers use either path depending on the layer.
+        # layers use either path depending on the layer. Also handle
+        # LiquidAI LFM naming (self_attn.out_proj) generically.
         if "o_proj" in target_weights:
             o_modified = False
-            if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
-                W = layer.self_attn.o_proj.weight.data
-                _project_2d(W, d, alpha)
-                o_modified = True
+            o_weights = []
+            if hasattr(layer, "self_attn"):
+                for wname in ("o_proj", "out_proj"):
+                    if hasattr(layer.self_attn, wname):
+                        o_weights.append(getattr(layer.self_attn, wname).weight.data)
             if hasattr(layer, "linear_attn") and hasattr(layer.linear_attn, "out_proj"):
-                W = layer.linear_attn.out_proj.weight.data
-                _project_2d(W, d, alpha)
+                o_weights.append(layer.linear_attn.out_proj.weight.data)
+            for W in o_weights:
+                if mpoa:
+                    _project_2d_mpoa(W, d, alpha)
+                else:
+                    _project_2d(W, d, alpha)
                 o_modified = True
             if o_modified:
                 modified_weights.append("o_proj")
 
         # --- down_proj (MLP) ---
+        # Handles both standard llama naming (mlp.down_proj) and LiquidAI
+        # LFM naming (mlp.w2) generically.
         if "down_proj" in target_weights:
-            if hasattr(layer, "mlp") and hasattr(layer.mlp, "down_proj"):
-                W = layer.mlp.down_proj.weight.data
-                _project_2d(W, d, alpha)
+            down_modified = False
+            mlp = getattr(layer, "mlp", None)
+            if mlp is not None:
+                for wname in ("down_proj", "w2"):
+                    if hasattr(mlp, wname):
+                        if mpoa:
+                            _project_2d_mpoa(getattr(mlp, wname).weight.data, d, alpha)
+                        else:
+                            _project_2d(getattr(mlp, wname).weight.data, d, alpha)
+                        down_modified = True
+            if down_modified:
                 modified_weights.append("down_proj")
 
         # --- per-expert down weights (MoE) ---
@@ -200,9 +292,15 @@ def excise_node(state: AbliterationState) -> dict[str, Any]:
                     continue
                 if e_param.dim() == 3:
                     # [E, H, D] per-expert weight
-                    _project_3d_expert(e_param.data, d, alpha)
+                    if mpoa:
+                        _project_3d_expert_mpoa(e_param.data, d, alpha)
+                    else:
+                        _project_3d_expert(e_param.data, d, alpha)
                 elif e_param.dim() == 2:
-                    _project_2d(e_param.data, d, alpha)
+                    if mpoa:
+                        _project_2d_mpoa(e_param.data, d, alpha)
+                    else:
+                        _project_2d(e_param.data, d, alpha)
                 else:
                     # Unexpected rank — skip defensively rather than crash.
                     continue

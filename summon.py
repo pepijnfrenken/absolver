@@ -151,10 +151,10 @@ def summon_node(state: AbliterationState) -> dict:
 
     # 3. Load model.
     dtype = getattr(torch, cfg.dtype, None)
-    kwargs: dict[str, Any] = {
-        "trust_remote_code": cfg.trust_remote_code,
-        "device_map": cfg.device,
-    }
+    kwargs: dict[str, Any] = {"trust_remote_code": cfg.trust_remote_code}
+    use_device_map = cfg.device and cfg.device != "auto"
+    if use_device_map:
+        kwargs["device_map"] = cfg.device
     if dtype is not None:
         kwargs["torch_dtype"] = dtype
     if cfg.quantize:
@@ -283,11 +283,17 @@ def summon_node(state: AbliterationState) -> dict:
         arch_info.get("num_experts"),
     )
 
+    # Store model & tokenizer in registry (bypasses LangGraph serialization).
+    # Move to GPU when device_map wasn't used.
+    if not use_device_map and torch.cuda.is_available():
+        model = model.cuda()
+    from model_registry import set_model, set_tokenizer
+    set_model(model)
+    set_tokenizer(tokenizer)
+    import os; print(f"SUMMON pid={os.getpid()} model={model is not None}")
+
     return {
         "model_loaded": True,
-        "model_obj": model,
-        "tokenizer": tokenizer,
-        "experience_db": db,
         "architecture": arch_info.get("architecture"),
         "hidden_size": arch_info.get("hidden_size"),
         "num_layers": arch_info.get("num_layers"),

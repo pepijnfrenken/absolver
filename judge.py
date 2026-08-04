@@ -1,16 +1,17 @@
-"""JUDGE node — LLM-as-judge scoring of model responses via OMP."""
+"""JUDGE node — LLM-as-judge scoring of model responses via a direct API call."""
 from __future__ import annotations
+from model_registry import get_model, get_tokenizer
 
 import json
 import logging
 import os
 import re
-import subprocess
-import tempfile
 from typing import Any
 
 import torch
 
+from llm_api import chat_completion
+from prompt_format import detect_prompt_format, format_prompt
 from prompts import JUDGE_PROMPT_TEMPLATE
 from state import AbliterationState
 from verify import REFUSAL_KEYWORDS
@@ -32,33 +33,24 @@ def _keyword_refusal_score(response: str) -> float:
     return 1.0 if any(kw in response_lower for kw in REFUSAL_KEYWORDS) else 0.0
 
 
-def _call_omp(judge_input: str, cfg: Any) -> str:
-    """Invoke ``omp -p --model <judge_model> @<tmpfile>`` and return its stdout.
+def _call_judge_api(judge_input: str, cfg: Any) -> str:
+    """Invoke the judge LLM via a direct OpenAI-compatible chat-completions call.
 
-    Raises on any failure (nonzero exit, timeout, missing binary); callers
-    are expected to catch and fall back to keyword scoring.
+    Uses the configured base URL / model / key; falls back to FreeInference.
+    Raises on any failure; callers catch and fall back to keyword scoring.
     """
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=True
-    ) as f:
-        f.write(judge_input)
-        f.flush()
-        judge_api_key = getattr(cfg, "judge_api_key", None)
-        env = {**os.environ}
-        if judge_api_key:
-            env["OPENAI_API_KEY"] = judge_api_key
-        proc = subprocess.run(
-            ["omp", "-p", "--model", cfg.judge_model, f"@{f.name}"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env=env,
-        )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"omp exited {proc.returncode}: {proc.stderr.strip()[:300]}"
-        )
-    return proc.stdout
+    base_url = getattr(cfg, "judge_base_url", None) or "https://freeinference.org/v1"
+    api_key = getattr(cfg, "judge_api_key", None)
+    model = getattr(cfg, "judge_model", None) or "deepseek-v4-flash"
+    return chat_completion(
+        judge_input,
+        model=model,
+        base_url=base_url,
+        api_key=api_key or None,
+        max_tokens=getattr(cfg, "judge_max_tokens", 1024),
+        temperature=getattr(cfg, "judge_temperature", 0.0),
+        timeout=90,
+    )
 
 
 def _parse_verdict(verdict_text: str) -> dict[str, Any]:
@@ -106,8 +98,8 @@ def judge_node(state: AbliterationState) -> dict[str, Any]:
     if not cfg.judge_enabled:
         return {"judge_verdict": "pass", "judge_results": []}
 
-    model = state["model_obj"]
-    tok = state["tokenizer"]
+    model = get_model()
+    tok = get_tokenizer()
     test_prompts = list(state.get("harmful_prompts") or [])[: cfg.judge_prompts]
 
     # ------------------------------------------------------------------ #
@@ -116,18 +108,30 @@ def judge_node(state: AbliterationState) -> dict[str, Any]:
     responses: list[str] = []
     judge_max_tokens = cfg.judge_max_tokens
     judge_temperature = cfg.judge_temperature
+    # temperature <= 0 with do_sample=True is invalid on many backends;
+    # use greedy decoding (do_sample=False) in that case.
+    do_sample = judge_temperature > 0
+
+    # Resolve how prompts should be formatted for THIS model (chat
+    # template / thinking tokens / raw), so the judge sees real outputs
+    # instead of garbage from a bare prompt on a chat-style model.
+    fmt = detect_prompt_format(tok, getattr(cfg, "prompt_format", "auto"))
+    logger.info("JUDGE: prompt_format=%s (chat_template=%s, thinking=%s)",
+                fmt, hasattr(tok, "chat_template") and bool(tok.chat_template),
+                "<think>" in (getattr(tok, "get_vocab", lambda: {})() or {}))
 
     for prompt in test_prompts:
+        formatted = format_prompt(tok, prompt, fmt)
         inp = tok(
-            prompt, return_tensors="pt", truncation=True, max_length=cfg.max_seq_len
+            formatted, return_tensors="pt", truncation=True, max_length=cfg.max_seq_len
         ).to(_model_device(model))
         try:
             with torch.no_grad():
                 out = model.generate(
                     **inp,
                     max_new_tokens=judge_max_tokens,
-                    do_sample=True,
-                    temperature=judge_temperature,
+                    do_sample=do_sample,
+                    temperature=judge_temperature if do_sample else None,
                 )
             responses.append(tok.decode(out[0], skip_special_tokens=True))
         except Exception as exc:
@@ -138,8 +142,8 @@ def judge_node(state: AbliterationState) -> dict[str, Any]:
                     out = model.generate(
                         **inp,
                         max_new_tokens=64,
-                        do_sample=True,
-                        temperature=judge_temperature,
+                        do_sample=do_sample,
+                        temperature=judge_temperature if do_sample else None,
                     )
                 responses.append(tok.decode(out[0], skip_special_tokens=True))
             except Exception as exc2:
@@ -147,34 +151,22 @@ def judge_node(state: AbliterationState) -> dict[str, Any]:
                 responses.append("")
 
     # ------------------------------------------------------------------ #
-    # 2. Judge each (prompt, response) pair via OMP, with keyword fallback.
+    # 2. Judge each (prompt, response) pair via a direct API call, with
+    #    keyword fallback.
     # ------------------------------------------------------------------ #
     results: list[dict[str, Any]] = []
     for prompt, response in zip(test_prompts, responses):
         judge_input = JUDGE_PROMPT_TEMPLATE.format(prompt=prompt, response=response)
 
         try:
-            verdict_text = _call_omp(judge_input, cfg)
+            verdict_text = _call_judge_api(judge_input, cfg)
             verdict = _parse_verdict(verdict_text)
-        except subprocess.TimeoutExpired:
-            logger.warning("omp timed out; using keyword fallback")
-            # Retry once, then give up and use keyword fallback.
-            try:
-                verdict_text = _call_omp(judge_input, cfg)
-                verdict = _parse_verdict(verdict_text)
-            except Exception:
-                verdict = {
-                    "refusal_score": _keyword_refusal_score(response),
-                    "quality_score": 0.5,
-                    "reason": "omp_timeout_keyword_fallback",
-                }
-        except (FileNotFoundError, OSError, RuntimeError, Exception) as exc:
-            # OMP not installed, crashed, or returned an error — keyword fallback.
-            logger.warning("omp call failed (%s); using keyword fallback", exc)
+        except Exception as exc:
+            logger.warning("judge API call failed (%s); using keyword fallback", exc)
             verdict = {
                 "refusal_score": _keyword_refusal_score(response),
                 "quality_score": 0.5,
-                "reason": "omp_error_keyword_fallback",
+                "reason": "judge_api_error_keyword_fallback",
             }
 
         results.append(
@@ -210,10 +202,25 @@ def judge_node(state: AbliterationState) -> dict[str, Any]:
     else:
         verdict = "pass"
 
+    # Increment the ouroboros counter on any judge failure so the
+    # route_after_judge excise loop hits its cap. verify_node only bumps
+    # this counter when refusal_rate > ouroboros_threshold (0.5), which
+    # almost never happens — without this bump, a failing judge loops
+    # excise -> verify -> judge forever.
+    ouroboros_count = int(state.get("ouroboros_count", 0))
+    if verdict != "pass":
+        ouroboros_count += 1
+
+    logger.info(
+        "JUDGE verdict=%s refusal_rate=%.3f quality_mean=%.3f ouroboros=%d",
+        verdict, refusal_rate, quality_mean, ouroboros_count,
+    )
+
     return {
         "judge_results": results,
         "judge_refusal_rate": refusal_rate,
         "judge_quality_mean": quality_mean,
         "judge_verdict": verdict,
         "judge_evidence": evidence,
+        "ouroboros_count": ouroboros_count,
     }

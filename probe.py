@@ -7,6 +7,7 @@ For MoE models, additionally collects router logits via
 ``output_router_logits=True``.
 """
 from __future__ import annotations
+from model_registry import get_model, get_tokenizer
 
 import logging
 from collections import defaultdict
@@ -188,6 +189,107 @@ def _collect_router_logits(
 
 
 # ---------------------------------------------------------------------------
+# Paired output-phase probe (the LFM2.5 winning recipe)
+# ---------------------------------------------------------------------------
+
+def _collect_paired_output_phase(
+    model: Any,
+    tok: Any,
+    prompts: list[str],
+    layers,
+    num_layers: int,
+    device: Any,
+    prefill: str,
+    max_new_tokens: int,
+) -> tuple[dict[int, list[torch.Tensor]], dict[int, list[torch.Tensor]]]:
+    """Output-phase activation harvest on the SAME prompts, two conditions.
+
+    For every harmful prompt:
+      1. *Unprimed* generation (plain prompt) — the model refuses. The
+         per-step last-token hidden states during generation are the
+         output-phase "refusal" activations.
+      2. *Affirmative-prefilled* generation (prompt + prefill) — the model
+         continues compliantly from the prefill. Per-step last-token hidden
+         states are the output-phase "compliance" activations.
+
+    Returns ``(refusal_acts, affirm_acts)``: dicts of layer index -> list of
+    per-prompt mean vectors [hidden]. The first capture of each generation
+    (the pure-prompt forward) is dropped in the refusal condition so only
+    response-token activations are averaged; the prefill condition keeps it
+    because the prefill IS the response start.
+
+    This is the direction source from the successful
+    ``LFM2.5-1.2B-Instruct-Abliterated-Paired-Alpha2`` recipe: same prompts
+    in both groups removes topic/difficulty confounding.
+    """
+    refusal_acts: dict[int, list[torch.Tensor]] = defaultdict(list)
+    affirm_acts: dict[int, list[torch.Tensor]] = defaultdict(list)
+    pad_id = getattr(tok, "eos_token_id", None)
+
+    for p in prompts:
+        # --- refusal condition (unprimed) ---
+        store: dict[int, list[torch.Tensor]] = defaultdict(list)
+        handles = [
+            layers[i].register_forward_hook(_make_hook(i, store))
+            for i in range(num_layers)
+        ]
+        try:
+            inp = tok(p, return_tensors="pt", truncation=True, max_length=128)
+            inp = _to_device(inp, device)
+            with torch.no_grad():
+                model.generate(
+                    **inp, max_new_tokens=max_new_tokens, do_sample=False,
+                    pad_token_id=pad_id,
+                )
+        except Exception as exc:
+            logger.warning("paired probe (refusal) failed (%s): %s", p[:40], exc)
+        finally:
+            for h in handles:
+                try:
+                    h.remove()
+                except Exception:
+                    pass
+        # Drop step 0 (pure-prompt forward = input phase); average the rest.
+        for i in range(num_layers):
+            steps = store.get(i)
+            if not steps:
+                continue
+            resp = steps[1:] if len(steps) > 1 else steps
+            refusal_acts[i].append(torch.stack(resp).mean(dim=0))
+
+        # --- affirmative-prefilled condition ---
+        store2: dict[int, list[torch.Tensor]] = defaultdict(list)
+        handles2 = [
+            layers[i].register_forward_hook(_make_hook(i, store2))
+            for i in range(num_layers)
+        ]
+        try:
+            prefilled = f"{p} {prefill}".strip()
+            inp2 = tok(prefilled, return_tensors="pt", truncation=True, max_length=128)
+            inp2 = _to_device(inp2, device)
+            with torch.no_grad():
+                model.generate(
+                    **inp2, max_new_tokens=max_new_tokens, do_sample=False,
+                    pad_token_id=pad_id,
+                )
+        except Exception as exc:
+            logger.warning("paired probe (prefill) failed (%s): %s", p[:40], exc)
+        finally:
+            for h in handles2:
+                try:
+                    h.remove()
+                except Exception:
+                    pass
+        # Prefill IS the response start, so step 0 counts as output phase.
+        for i in range(num_layers):
+            steps = store2.get(i)
+            if steps:
+                affirm_acts[i].append(torch.stack(steps).mean(dim=0))
+
+    return dict(refusal_acts), dict(affirm_acts)
+
+
+# ---------------------------------------------------------------------------
 # Node
 # ---------------------------------------------------------------------------
 
@@ -198,8 +300,9 @@ def probe_node(state: AbliterationState) -> dict:
     ``router_logits`` (None unless the model is MoE and exposes router
     logits).
     """
-    model = state.get("model_obj")
-    tok = state.get("tokenizer")
+    import os; print(f"PROBE pid={os.getpid()} model={get_model() is not None} tok={get_tokenizer() is not None}")
+    model = get_model()
+    tok = get_tokenizer()
     arch = state.get("architecture")
 
     if model is None or tok is None:
@@ -216,12 +319,16 @@ def probe_node(state: AbliterationState) -> dict:
 
     harmful = state.get("harmful_prompts") or list(DEFAULT_HARMFUL)
     harmless = state.get("harmless_prompts") or list(DEFAULT_HARMLESS)
+    n_harm = getattr(state["config"], "n_probe_prompts", 20)
+    harmful = harmful[:n_harm]
+    harmless = harmless[:n_harm]
 
     logger.info(
-        "PROBE: arch=%s layers=%d device=%s harm=%d harmless=%d",
+        "PROBE: arch=%s layers=%d device=%s mode=%s harm=%d harmless=%d",
         arch,
         num_layers,
         device,
+        getattr(state["config"], "probe_mode", "input"),
         len(harmful),
         len(harmless),
     )
@@ -229,30 +336,54 @@ def probe_node(state: AbliterationState) -> dict:
     harm_acts: dict[int, list[torch.Tensor]] = defaultdict(list)
     harmless_acts: dict[int, list[torch.Tensor]] = defaultdict(list)
 
-    def run_set(prompts: list[str], store: dict[int, list[torch.Tensor]]) -> None:
-        handles = [
-            layers[i].register_forward_hook(_make_hook(i, store))
-            for i in range(num_layers)
-        ]
-        try:
-            for p in prompts:
-                try:
-                    inp = tok(p, return_tensors="pt", truncation=True, max_length=128)
-                except Exception as exc:
-                    logger.warning("tokenize failed (%s): %s", p[:40], exc)
-                    continue
-                inp = _to_device(inp, device)
-                with torch.no_grad():
-                    model(**inp)
-        finally:
-            for h in handles:
-                try:
-                    h.remove()
-                except Exception:  # pragma: no cover - defensive
-                    pass
+    # Paired output-phase mode: same harmful prompts in both groups, refusal
+    # (unprimed generation) vs affirmative-prefilled generation. This is the
+    # direction source of the successful LFM2.5 abliteration — it removes the
+    # topic/difficulty confound of input-phase diff_means over two prompt sets.
+    probe_mode = getattr(state["config"], "probe_mode", "input")
+    if probe_mode == "paired":
+        prefill = getattr(state["config"], "paired_prefill", "Sure, I can help with that.")
+        max_new = getattr(state["config"], "paired_max_new_tokens", 64)
+        if not hasattr(model, "generate"):
+            raise RuntimeError(
+                "PROBE: probe_mode='paired' requires a generation-capable "
+                "model (CausalLM), but this model has no .generate()."
+            )
+        refusal_acts, affirm_acts = _collect_paired_output_phase(
+            model, tok, harmful, layers, num_layers, device, prefill, max_new
+        )
+        harm_acts = refusal_acts
+        harmless_acts = affirm_acts
+        logger.info(
+            "PROBE (paired): refusal_layers=%d affirm_layers=%d",
+            len(harm_acts),
+            len(harmless_acts),
+        )
+    else:
+        def run_set(prompts: list[str], store: dict[int, list[torch.Tensor]]) -> None:
+            handles = [
+                layers[i].register_forward_hook(_make_hook(i, store))
+                for i in range(num_layers)
+            ]
+            try:
+                for p in prompts:
+                    try:
+                        inp = tok(p, return_tensors="pt", truncation=True, max_length=128)
+                    except Exception as exc:
+                        logger.warning("tokenize failed (%s): %s", p[:40], exc)
+                        continue
+                    inp = _to_device(inp, device)
+                    with torch.no_grad():
+                        model(**inp)
+            finally:
+                for h in handles:
+                    try:
+                        h.remove()
+                    except Exception:  # pragma: no cover - defensive
+                        pass
 
-    run_set(harmful, harm_acts)
-    run_set(harmless, harmless_acts)
+        run_set(harmful, harm_acts)
+        run_set(harmless, harmless_acts)
 
     router_logits: dict[int, torch.Tensor] | None = None
     if arch == "moe":
