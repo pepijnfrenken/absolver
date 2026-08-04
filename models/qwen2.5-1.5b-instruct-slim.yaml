@@ -1,0 +1,64 @@
+# Qwen2.5-1.5B-Instruct — SLIM run (fits Modal task limits).
+#
+# The 72-candidate sweep blew the 7200s Modal timeout (2 runs, heartbeat
+# deaths, total >2h). Qwen's recipe is already known, so this uses a 4-candidate
+# mini-sweep around the tail layers + trimmed verify (fewer samples, shorter
+# judge) to finish inside one Modal task (~10-15 min).
+model_id: Qwen/Qwen2.5-1.5B-Instruct
+model_arch: dense
+dtype: bfloat16
+device: auto
+trust_remote_code: false
+
+# ---- Direction / surgery ----
+probe_mode: paired            # Qwen refusal lives in the tail — paired is enough
+dir_method: paired
+method: mpoa
+n_directions: 3
+alpha: 1.0
+passes: 1
+target_layers: [26, 27]
+target_weights: [o_proj]
+paired_prefill: "Sure, I can help with that."
+paired_max_new_tokens: 48
+
+# ---- Probe / prompts (smaller for speed) ----
+prompt_format: "auto"
+n_probe_prompts: 12
+n_verify_prompts: 10
+max_seq_len: 512
+
+# ---- Judge ----
+judge_model: "deepseek-v4-flash"
+judge_base_url: "https://freeinference.org/v1"
+judge_enabled: true
+judge_max_tokens: 120
+judge_refusal_threshold: 0.05
+judge_quality_threshold: 0.7
+
+# ---- Mini-sweep: 4 candidates, finds the best tail-layer config ----
+sweep_enabled: true
+sweep_methods: [mpoa]
+sweep_dir_methods: [paired]
+sweep_layer_sets: [[27], [26, 27]]
+sweep_alphas: [1.0, 2.0]
+sweep_passes: [1]
+sweep_target_weights: [[o_proj]]
+sweep_judge_enabled: true
+sweep_kl_quality: true
+
+# ---- Verification (trimmed for time) ----
+verify_benchmarks: [mmlu_pro, gpqa]
+verify_benchmark_samples: 15
+model_card_targets:
+  mmlu_pro: 32.4
+  gpqa: 29.8
+verify_pristine_baseline: true
+behavior_enabled: true
+n_behavior_harmful: 5
+n_behavior_benign: 5
+behavior_max_new_tokens: 64
+
+# ---- Push ----
+push_to_hub: PinoCookie/Qwen2.5-1.5B-Instruct-Abliterated
+hub_private: false
