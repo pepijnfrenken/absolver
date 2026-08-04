@@ -292,6 +292,13 @@ def summon_node(state: AbliterationState) -> dict:
     set_tokenizer(tokenizer)
     import os; print(f"SUMMON pid={os.getpid()} model={model is not None}")
 
+    # Honor an explicit config target_weights (e.g. the LFM2.5 winning
+    # recipe uses o_proj ONLY); arch detection is the fallback.
+    cfg_tw = getattr(state.get("config"), "target_weights", None) if state.get("config") else None
+    target_weights = (
+        list(cfg_tw) if cfg_tw
+        else arch_info.get("target_weights", ["o_proj", "down_proj"])
+    )
     return {
         "model_loaded": True,
         "architecture": arch_info.get("architecture"),
@@ -299,5 +306,5 @@ def summon_node(state: AbliterationState) -> dict:
         "num_layers": arch_info.get("num_layers"),
         "num_experts": arch_info.get("num_experts"),
         "layer_types": arch_info.get("layer_types"),
-        "target_weights": arch_info.get("target_weights", ["o_proj", "down_proj"]),
+        "target_weights": target_weights,
     }
