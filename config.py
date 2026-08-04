@@ -113,6 +113,11 @@ class ModelConfig(BaseModel):
     # ------------------------------------------------------------------ #
     sweep_enabled: bool = False
     """Try multiple ablation methods & configs, pick the best."""
+    sweep_parallel: bool = False
+    """Dispatch sweep candidates to parallel Modal tasks instead of running
+    them sequentially in the graph container. Big grids (50+) go from
+    N*20s serial to ~wall-time/10; small grids (<=8) are FASTER sequential
+    (no per-task model cold-start)."""
     sweep_methods: list[str] = Field(
         default_factory=lambda: ["advanced", "mpoa", "projected"]
     )

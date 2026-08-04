@@ -96,6 +96,79 @@ def run_pipeline(config_path: str) -> dict:
         "benchmark_scores": bench,
     }
 
+@app.function(
+    image=image,
+    gpu="L4",
+    timeout=1800,
+    retries=0,
+    secrets=[
+        modal.Secret.from_name("hf-write-token"),
+        modal.Secret.from_name("freeinference-token"),
+    ],
+)
+def evaluate_sweep_candidate(payload: dict) -> dict:
+    """Evaluate ONE sweep candidate in its own Modal container.
+
+    Loads the model, applies the candidate's ablation using the provided
+    direction tensors, quick-scores refusal/quality/KL, and returns. This is
+    the unit of parallelism for the sweep: modal.map fans candidates out
+    across containers (~10 concurrent), turning N*20s serial into
+    ~max-candidate-time + cold-start wall time.
+    """
+    import os
+    import sys
+    import torch
+    os.chdir("/absolver")
+    sys.path.insert(0, "/absolver")
+
+    from summon import summon_node
+    from model_registry import get_model, get_tokenizer
+    from sweep import _apply_candidate, _quick_score
+    from prompts import DEFAULT_HARMFUL
+
+    model_id = payload["model_id"]
+    cand = payload["candidate"]
+    probe_cfg = payload["probe_cfg"]
+
+    try:
+        # Load the model via the SUMMON node (respects dtype/device/arch).
+        summon_node({
+            "config": type("C", (), {
+                "model_id": model_id,
+                "model_arch": "dense",
+                "dtype": "bfloat16",
+                "device": "auto",
+                "trust_remote_code": False,
+            })(),
+            "model_loaded": False,
+            "architecture": None,
+            "hidden_size": None,
+            "num_layers": None,
+        })
+        model = get_model()
+        tok = get_tokenizer()
+
+        # Rebuild direction tensors from the serialized plain data.
+        dirs_plain = payload["directions"]
+        directions = {}
+        for k, v in dirs_plain.items():
+            if isinstance(v, list):
+                directions[int(k)] = torch.tensor(v, dtype=torch.float32)
+            else:
+                directions[int(k)] = v
+
+        _apply_candidate(model, directions, None, cand, None)
+
+        # Quick-score: generate on a handful of harmful prompts.
+        prompts = list(DEFAULT_HARMFUL)[: probe_cfg.get("n_verify_prompts", 10)]
+        score = _quick_score(model, tok, None, prompts, base_logprobs=None)
+        return score
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return {"refusal": 1.0, "quality": 0.0, "kl": None, "error": str(exc)}
+
+
 @app.local_entrypoint()
 def main(config_path: str = "models/minicpm5-1b.yaml"):
     """Run the abliteration pipeline for a model config (YAML under models/).

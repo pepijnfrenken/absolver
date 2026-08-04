@@ -135,6 +135,60 @@ def _find_layers(model: Any):
     raise RuntimeError("Cannot locate transformer layers")
 
 
+def _dispatch_parallel_candidate(cand: dict, directions: dict, state: Any, cfg: Any) -> dict:
+    """Dispatch a single sweep candidate to its own Modal task.
+
+    Serializes the candidate + direction tensors (CPU, lists) and calls the
+    remote `evaluate_sweep_candidate` function. Falls back to a serialized
+    in-process evaluation if Modal is unavailable (local smoke tests).
+
+    Returns the scored result dict merged with the candidate.
+    """
+    try:
+        import modal
+        # Host-side: build the same App/function the runner exposes.
+        from run_absolver_modal import app, evaluate_sweep_candidate
+
+        # Directions must be plain data for modal.map serialization.
+        dirs_plain = {
+            str(k): (v.tolist() if hasattr(v, "tolist") else v)
+            for k, v in directions.items()
+        }
+        payload = {
+            "model_id": cfg.model_id,
+            "candidate": cand,
+            "directions": dirs_plain,
+            "probe_cfg": {
+                "n_directions": cfg.n_directions,
+                "prompt_format": getattr(cfg, "prompt_format", "auto"),
+                "n_verify_prompts": getattr(cfg, "n_verify_prompts", 20),
+                "max_seq_len": getattr(cfg, "max_seq_len", 1024),
+                "paired_prefill": getattr(cfg, "paired_prefill", None),
+            },
+        }
+        # modal.map runs each payload in its own container, ~10 concurrent.
+        with modal.environ() as _env:
+            out = list(map(evaluate_sweep_candidate.remote, [payload]))
+        score = out[0] or {}
+        return {**cand, **score, "objective": float(score.get("objective", -9.0))}
+    except Exception as exc:
+        logger.warning("SWEEP parallel dispatch failed (%s) — falling back to serial", exc)
+        # In-process fallback: reuse the graph's own machinery via import.
+        from model_registry import get_model, get_tokenizer
+        from sweep import _quick_score
+        model, tok = get_model(), get_tokenizer()
+        _restore(model, state.get("pristine_state_dict"))
+        try:
+            _apply_candidate(model, directions, state.get("pristine_state_dict"), cand, None)
+            score = _quick_score(model, tok, cfg, [], base_logprobs=None)
+            return {**cand, **score}
+        except Exception as exc2:
+            logger.warning("SWEEP parallel fallback failed: %s", exc2)
+            return {**cand, "refusal": 1.0, "quality": 0.0, "objective": -1.0}
+
+
+
+
 def _as_1d(dirs) -> torch.Tensor:
     """Return the first refusal direction as a flat 1D vector.
 
@@ -588,6 +642,22 @@ def sweep_node(state: AbliterationState) -> dict[str, Any]:
                 logger.info("SWEEP: recomputed directions for dir_method=%s (%d layers)",
                             dm, len(dir_cache[dm]))
         cand_directions = dir_cache[dm]
+
+        # ------------------------------------------------------------------ #
+        # PARALLEL PATH: dispatch this candidate to its own Modal task.
+        # Each task loads the model fresh, applies the edit, quick-scores,
+        # and returns. Wall-clock ~= (max candidate time) + cold start instead
+        # of N * candidate time. Only worth it for grids > ~8 candidates.
+        # ------------------------------------------------------------------ #
+        if getattr(cfg, "sweep_parallel", False):
+            results.append(_dispatch_parallel_candidate(cand, cand_directions, state, cfg))
+            logger.info(
+                "SWEEP %d/%d: [parallel] method=%s dir=%s layers=%s alpha=%.2f passes=%d → %s",
+                i + 1, len(grid), cand["method"], cand["dir_method"],
+                cand["target_layers"], cand["alpha"], cand["passes"],
+                {k: results[-1].get(k) for k in ("refusal", "quality", "kl", "objective")},
+            )
+            continue
 
         _restore(model, pristine)
         _apply_candidate(model, cand_directions, pristine, cand, good_cache.get(dm))
