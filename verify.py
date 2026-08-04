@@ -973,6 +973,61 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
             )
 
     # ------------------------------------------------------------------ #
+    # 3b. Pristine baseline — run the SAME benchmarks on the base model and
+    #      report the delta. Static model-card numbers come from different
+    #      eval setups (full set, thinking mode); the pristine-vs-abliterated
+    #      delta under identical conditions is the true capability impact.
+    # ------------------------------------------------------------------ #
+    pristine_scores: dict[str, float] = {}
+    pristine = state.get("pristine_state_dict")
+    if (
+        getattr(cfg, "verify_pristine_baseline", True)
+        and pristine
+        and requested
+        and benchmark_scores
+    ):
+        try:
+            import torch as _torch
+            dev = _model_device(model)
+            # Snapshot abliterated weights, load pristine, run benchmarks.
+            ab_snapshot = {
+                k: v.clone().cpu() if isinstance(v, _torch.Tensor) else v
+                for k, v in model.state_dict().items()
+            }
+            model.load_state_dict({
+                k: v.to(device=dev) if isinstance(v, _torch.Tensor) else v
+                for k, v in pristine.items()
+            })
+            for bench_name in requested:
+                runner = _RUNNER.get(bench_name)
+                if runner is None:
+                    continue
+                try:
+                    pristine_scores[bench_name] = runner(model, tok, n=bench_sample_n)
+                except Exception as exc:
+                    logger.warning("Pristine benchmark '%s' failed: %s", bench_name, exc)
+            model.load_state_dict({
+                k: v.to(device=dev) if isinstance(v, _torch.Tensor) else v
+                for k, v in ab_snapshot.items()
+            })
+            logger.info("PRISTINE baseline: %s", {k: round(v, 4) for k, v in pristine_scores.items()})
+        except Exception as exc:
+            logger.warning("Pristine baseline failed: %s", exc)
+            pristine_scores = {}
+
+    # ------------------------------------------------------------------ #
+    # 3c. Behavior battery — harmful-response classification + benign drift.
+    # ------------------------------------------------------------------ #
+    behavior_report: dict[str, Any] = {}
+    if getattr(cfg, "behavior_enabled", False):
+        try:
+            from behavior import run_behavior_battery
+            behavior_report = run_behavior_battery(state, cfg)
+        except Exception as exc:
+            logger.warning("Behavior battery failed: %s", exc)
+            behavior_report = {}
+
+    # ------------------------------------------------------------------ #
     # 4. Model-card comparison table (when targets are provided).
     # ------------------------------------------------------------------ #
     if cfg.model_card_targets and benchmark_scores:
@@ -1000,6 +1055,8 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
         "mmlu_score": mmlu_score,
         "quality_pass": quality_pass,
         "benchmark_scores": benchmark_scores,
+        "pristine_scores": pristine_scores,
+        "behavior_report": behavior_report,
     }
 
 

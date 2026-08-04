@@ -176,6 +176,22 @@ class ModelConfig(BaseModel):
     """Response length generated per prompt in 'paired' probe mode."""
     verify_sample_size: int = 0
     """MMLU-mini sample size (0 = skip MMLU)."""
+    verify_pristine_baseline: bool = True
+    """Run each benchmark on the PRISTINE (base) model too and report the
+    abliterated-vs-pristine delta. The delta is the real capability-impact
+    signal (the profile LFM2.5 recipe's MMLU 47.4% vs 45.9% base) — static
+    model-card numbers come from different eval setups and hide the change."""
+    behavior_enabled: bool = True
+    """Run the behavior battery: harmful-response classification (refusal /
+    compliant / evasive / garbage via LLM judge) and benign-prompt drift
+    (Jaccard word overlap, opener match, length ratio vs the pristine model).
+    This is the 'is it still the same model' check the research notes use."""
+    n_behavior_harmful: int = 10
+    """Harmful prompts in the behavior battery (LLM-judged into categories)."""
+    n_behavior_benign: int = 10
+    """Benign prompts in the behavior battery (pristine-vs-abliterated drift)."""
+    behavior_max_new_tokens: int = 96
+    """Response length generated for behavior analysis."""
     verify_benchmarks: list[str] = Field(default_factory=list)
     """Optional override list. Empty = auto-derive benchmark set from
     model_card_targets keys that have a registered runner."""

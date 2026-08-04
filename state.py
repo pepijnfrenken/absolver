@@ -99,6 +99,14 @@ class AbliterationState(TypedDict, total=False):
     mmlu_score: float | None
     benchmark_scores: dict[str, float]
     """Per-benchmark scores from the extended VERIFY run (model-card derived)."""
+    pristine_scores: dict[str, float]
+    """Per-benchmark scores of the PRISTINE (base) model under identical
+    conditions — the abliterated-vs-pristine delta is the true capability
+    impact (static card numbers come from different eval setups)."""
+    behavior_report: dict[str, Any]
+    """Behavior battery results: harmful-response classification (refusal /
+    evasive / compliant / garbage) and benign drift vs pristine (Jaccard
+    word overlap, opener match rate, length ratio)."""
     quality_pass: bool
 
     # ------------------------------------------------------------------ #

@@ -1,7 +1,7 @@
 {
   "model_id": "hf-internal-testing/tiny-random-LlamaForCausalLM",
-  "method": "advanced",
-  "dir_method": "diff_means",
+  "method": "mpoa",
+  "dir_method": "paired",
   "alpha": 2.0,
   "passes": 1,
   "target_layers": [
@@ -17,8 +17,8 @@
   "reflexion_history": [],
   "final_verdict": "success",
   "separation_scores": {
-    "0": 0.03613092750310898,
-    "1": 0.03437521308660507
+    "0": 0.020757902413606644,
+    "1": 0.0209110789000988
   },
   "pipeline_passed": true
 }

@@ -45,6 +45,7 @@ def _write_model_card(output_dir: Path, state: AbliterationState, cfg: Any) -> N
                     delta = a_pct - t
                     rows.append(f"| {bench:12s} | {a_pct:>6.1f}%      | {t:>5.1f}%        | {delta:>+.1f}pp |")
                 elif a is not None:
+                    a_pct = a * 100.0
                     rows.append(f"| {bench:12s} | {a_pct:>6.1f}%      | —           | —        |")
                 elif t is not None:
                     rows.append(f"| {bench:12s} | —           | {t:>5.1f}%        | —        |")
@@ -89,7 +90,7 @@ def _write_model_card(output_dir: Path, state: AbliterationState, cfg: Any) -> N
             "",
             "## Method",
             f"- Pipeline: SUMMON → PROBE → DISTILL → SWEEP → EXCISE → VERIFY → JUDGE → REBIRTH (LangGraph)",
-            f"- Method: {method_name} (sweep-selected across advanced / bias_vectors / direct_ablation / projected / lora)",
+            f"- Method: {method_name} (sweep-selected across advanced / mpoa / bias_vectors / direct_ablation / projected / lora)",
             f"- Direction extraction: {dir_method}, 3 directions",
             f"- Projection strength α = {alpha}, {passes} pass(es)",
             f"- Target layers: {target_layers}",
@@ -107,6 +108,71 @@ def _write_model_card(output_dir: Path, state: AbliterationState, cfg: Any) -> N
             "",
             f"- Refusal rate: {refusal_rate:.3f} (LLM-judged on harmful prompts)",
             "",
+        ]
+
+        # Pristine-baseline delta table — the real capability-impact signal.
+        pristine = state.get("pristine_scores") or {}
+        if pristine and scores:
+            lines += [
+                "## Capability impact (abliterated vs pristine, identical eval)",
+                "",
+                "| Benchmark     | Abliterated | Pristine | Δ       |",
+                "|---|---|---|---|",
+            ]
+            for bench in sorted(set(pristine) | set(scores)):
+                a = scores.get(bench)
+                p = pristine.get(bench)
+                if a is None or p is None:
+                    continue
+                a_pct = a * 100.0
+                p_pct = p * 100.0
+                delta = a_pct - p_pct
+                lines.append(
+                    f"| {bench:12s} | {a_pct:>6.1f}%      | {p_pct:>6.1f}%     | {delta:>+.1f}pp |"
+                )
+            lines.append(
+                "*Benchmarks run identically (same subset, greedy, no-thinking) on the pristine base and the "
+                "abliterated model — the Δ column is the true capability cost of the edit.*"
+            )
+            lines.append("")
+
+        # Behavior battery section — harmful classification + benign drift.
+        behavior = state.get("behavior_report") or {}
+        if behavior:
+            lines += ["## Behavior analysis", ""]
+            harmful = behavior.get("harmful") or {}
+            benign = behavior.get("benign") or {}
+            if harmful:
+                lines += [
+                    "### Harmful-prompt response classification",
+                    "",
+                    "| Category   | Count | Rate  |",
+                    "|---|---|---|",
+                    f"| refusal    | {harmful.get('refusal', 0)} | {harmful.get('refusal_rate', 0):.1%} |",
+                    f"| evasive    | {harmful.get('evasive', 0)} | — |",
+                    f"| compliant  | {harmful.get('compliant', 0)} | {harmful.get('compliant_rate', 0):.1%} |",
+                    f"| garbage    | {harmful.get('garbage', 0)} | — |",
+                    "",
+                    f"- **Delivery rate**: {harmful.get('delivery_rate', 0):.1%} of non-refusing responses actually provide substantive content "
+                    "(a low delivery rate with low refusal = the edit removed refusal but left the model unable/unwilling to comply usefully).",
+                    "",
+                ]
+            if benign:
+                lines += [
+                    "### Benign behavior drift (vs pristine)",
+                    "",
+                    "| Metric            | Value |",
+                    "|---|---|",
+                    f"| Mean word overlap (Jaccard) | {benign.get('mean_word_overlap', 0):.2%} |",
+                    f"| Opener match rate           | {benign.get('opener_match_rate', 0):.2%} |",
+                    f"| Mean length ratio           | {benign.get('mean_length_ratio', 0):.2f}× |",
+                    "",
+                    "*Same benign prompts through pristine and abliterated models: high overlap + high opener match = the "
+                    "edit left ordinary behavior intact.*",
+                    "",
+                ]
+
+        lines += [
             "## Notes",
             "- Benchmarks use compact built-in subsets (25-50 samples, greedy, no-thinking); model-card numbers are full-set + thinking mode, so a systematic gap is expected.",
             "- Capability impact is measured per-benchmark (see Δ column); the sweep selected the config that best preserves quality while removing refusal.",
