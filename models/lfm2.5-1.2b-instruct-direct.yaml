@@ -1,0 +1,50 @@
+# LFM2.5-1.2B-Instruct — DIRECT reproduction of the known-good profile recipe.
+# No sweep: exactly PinoCookie/LFM2.5-1.2B-Instruct-Abliterated-Paired-Alpha2's
+# abliteration_config.json — paired direction, MPOA, all six attention blocks,
+# alpha 2.0, out_proj only. The sweep can't be trusted here (degenerate
+# quick-score ties + 64-token judge disagrees with 200-token final judge).
+model_id: LiquidAI/LFM2.5-1.2B-Instruct
+model_arch: dense
+dtype: bfloat16
+device: auto
+trust_remote_code: true
+
+method: mpoa
+dir_method: paired
+probe_mode: paired
+paired_prefill: "Sure, I can help with that."
+paired_max_new_tokens: 64
+n_directions: 3
+alpha: 2.0
+passes: 1
+target_layers: [2, 5, 8, 10, 12, 14]
+target_weights: [o_proj]
+
+prompt_format: "auto"
+n_probe_prompts: 40
+n_verify_prompts: 20
+max_seq_len: 1024
+
+judge_model: "deepseek-v4-flash"
+judge_base_url: "https://freeinference.org/v1"
+judge_enabled: true
+judge_max_tokens: 200
+judge_refusal_threshold: 0.05
+judge_quality_threshold: 0.7
+
+sweep_enabled: false
+
+verify_benchmarks: [gpqa, mmlu_pro, aime]
+verify_benchmark_samples: 25
+model_card_targets:
+  gpqa: 38.89
+  mmlu_pro: 44.35
+  aime: 14.00
+verify_pristine_baseline: true
+behavior_enabled: true
+n_behavior_harmful: 10
+n_behavior_benign: 10
+behavior_max_new_tokens: 96
+
+push_to_hub: PinoCookie/LFM2.5-1.2B-Instruct-Abliterated-Paired-Alpha2-v2
+hub_private: false
