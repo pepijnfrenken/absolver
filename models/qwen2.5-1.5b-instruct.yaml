@@ -1,0 +1,69 @@
+# Qwen2.5-1.5B-Instruct — the "does the pipeline actually work" test.
+#
+# Known to abliterate cleanly (unlike LFM2.5-1.2B-Instruct, whose refusal
+# survives full-response judging), but not trivially: needs a real direction
+# (paired output-phase) and the right tail layers. 28-layer standard dense
+# Llama-style arch. This run exercises the FULL pipeline: paired probe,
+# MPOA/advanced sweep, pristine baseline, behavior battery, judge gate, card.
+model_id: Qwen/Qwen2.5-1.5B-Instruct
+model_arch: dense
+dtype: bfloat16
+device: auto
+trust_remote_code: false
+
+# ---- Direction / surgery ----
+probe_mode: auto              # collect both input + paired output-phase acts
+dir_method: paired            # base method; sweep also tries diff_means
+method: mpoa                  # base; sweep also tries advanced
+n_directions: 3
+alpha: 1.0
+passes: 1
+target_layers: [26, 27]       # Qwen2.5 refusal lives in the tail
+target_weights: [o_proj]
+paired_prefill: "Sure, I can help with that."
+paired_max_new_tokens: 64
+
+# ---- Probe / prompts ----
+prompt_format: "auto"         # Qwen2.5 chat template (<|im_start|>) auto-detected
+n_probe_prompts: 20
+n_verify_prompts: 20
+max_seq_len: 1024
+
+# ---- Judge (FreeInference, OpenAI-compatible) ----
+judge_model: "deepseek-v4-flash"
+judge_base_url: "https://freeinference.org/v1"
+judge_enabled: true
+judge_max_tokens: 200
+judge_refusal_threshold: 0.05
+judge_quality_threshold: 0.7
+
+# ---- SWEEP: let the pipeline FIND the config (no hand-written recipe) ----
+sweep_enabled: true
+sweep_methods: [mpoa, advanced]
+sweep_dir_methods: [paired, diff_means]
+sweep_layer_sets: [[27], [26, 27], [24, 26, 27]]
+sweep_alphas: [0.5, 1.0, 2.0]
+sweep_passes: [1, 2]
+sweep_target_weights: [[o_proj]]
+sweep_judge_enabled: true
+sweep_kl_quality: true
+
+# ---- Verification: match the ORIGINAL card + behavior battery ----
+# Official Qwen2.5-1.5B-Instruct numbers (Qwen blog, instruct table):
+#   MMLU-Pro 32.4 | GPQA 29.8 | MATH 55.2 | BBH 45.1
+verify_benchmarks: [mmlu_pro, gpqa, math, bbh]
+verify_benchmark_samples: 25
+model_card_targets:
+  mmlu_pro: 32.4
+  gpqa: 29.8
+  math: 55.2
+  bbh: 45.1
+verify_pristine_baseline: true
+behavior_enabled: true
+n_behavior_harmful: 10
+n_behavior_benign: 10
+behavior_max_new_tokens: 96
+
+# ---- Push ----
+push_to_hub: PinoCookie/Qwen2.5-1.5B-Instruct-Abliterated
+hub_private: false
