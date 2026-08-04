@@ -117,6 +117,20 @@ def _find_layers(model: Any):
     raise RuntimeError("Cannot locate transformer layers")
 
 
+def _as_1d(dirs) -> torch.Tensor:
+    """Return the first refusal direction as a flat 1D vector.
+
+    Directions can arrive as 1D [hidden], 2D [1, hidden] (probe hooks keep a
+    batch dim), or [n_dirs, hidden] (SVD/whitened). All `_apply_*` methods
+    must consume a flat vector or the projection math breaks (e.g. the
+    `(1x2048 and 1x2048)` matmul crash in _apply_projected_abliteration).
+    """
+    d = dirs[0] if torch.is_tensor(dirs) and dirs.dim() > 1 else dirs
+    if torch.is_tensor(d):
+        return d.reshape(-1)
+    return torch.as_tensor(d).reshape(-1)
+
+
 def _apply_advanced(model: Any, layers_mod, directions: dict, candidate: dict[str, Any]) -> None:
     """Weight projection (diff-means / SVD / LEACE — the current method)."""
     for layer_idx in candidate["target_layers"]:
@@ -124,7 +138,7 @@ def _apply_advanced(model: Any, layers_mod, directions: dict, candidate: dict[st
             continue
         layer = layers_mod[layer_idx]
         dirs = directions[layer_idx]
-        d = dirs[0]
+        d = _as_1d(dirs)
         for wname in candidate["target_weights"]:
             if wname == "o_proj" and hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
                 w = layer.self_attn.o_proj.weight.data  # .data detaches autograd (like excise)
@@ -157,7 +171,7 @@ def _apply_mpoa(model: Any, layers_mod, directions: dict, candidate: dict[str, A
             continue
         layer = layers_mod[layer_idx]
         dirs = directions[layer_idx]
-        d = dirs[0]
+        d = _as_1d(dirs)
         for wname in candidate["target_weights"]:
             if wname == "o_proj" and hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
                 w = layer.self_attn.o_proj.weight.data
@@ -186,7 +200,7 @@ def _apply_bias_vectors(model: Any, layers_mod, directions: dict, candidate: dic
             continue
         layer = layers_mod[layer_idx]
         dirs = directions[layer_idx]
-        d = dirs[0]
+        d = _as_1d(dirs)
         # Add bias to the layer output (both self-attention output and MLP output)
         if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
             bias_mod = layer.self_attn.o_proj.bias
@@ -213,7 +227,7 @@ def _apply_direct_ablation(model: Any, layers_mod, directions: dict, candidate: 
             continue
         layer = layers_mod[layer_idx]
         dirs = directions[layer_idx]
-        d = dirs[0]
+        d = _as_1d(dirs)
         for wname in candidate["target_weights"]:
             if wname == "o_proj" and hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
                 w = layer.self_attn.o_proj.weight
@@ -239,10 +253,10 @@ def _apply_projected_abliteration(model: Any, layers_mod, directions: dict,
         if layer_idx not in directions or layer_idx >= len(layers_mod):
             continue
         layer = layers_mod[layer_idx]
-        d = directions[layer_idx][0].to(torch.float32)
+        d = _as_1d(directions[layer_idx]).to(torch.float32)
         # Project refusal direction away from harmless direction
         if layer_idx in good_dirs:
-            g = good_dirs[layer_idx].to(torch.float32)
+            g = _as_1d(good_dirs[layer_idx]).to(torch.float32)
             d = d - (d @ g) * g
             d = d / d.norm().clamp(min=1e-8)
 
@@ -268,7 +282,7 @@ def _apply_lora_abliteration(model: Any, layers_mod, directions: dict,
         if layer_idx not in directions or layer_idx >= len(layers_mod):
             continue
         layer = layers_mod[layer_idx]
-        v = directions[layer_idx][0].to(torch.float32)
+        v = _as_1d(directions[layer_idx]).to(torch.float32)
         v = v / v.norm().clamp(min=1e-8)
         for wname in candidate["target_weights"]:
             if wname == "o_proj" and hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
