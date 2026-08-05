@@ -119,7 +119,7 @@ class ModelConfig(BaseModel):
     N*20s serial to ~wall-time/10; small grids (<=8) are FASTER sequential
     (no per-task model cold-start)."""
     sweep_methods: list[str] = Field(
-        default_factory=lambda: ["advanced", "mpoa", "projected"]
+        default_factory=lambda: ["advanced", "mpoa", "projected", "steering", "lora", "bias_vectors"]
     )
     """Candidate methods: advanced, mpoa (magnitude-preserving orthogonal
     ablation — the LFM2.5 winning recipe), bias_vectors, direct_ablation,
@@ -230,7 +230,13 @@ class ModelConfig(BaseModel):
     judge_prompts: int = 20
     """Number of prompts to send to the judge."""
     judge_refusal_threshold: float = 0.3
-    """Refusal-rate threshold above which the judge rejects a sample."""
+    """Refusal-rate threshold above which the judge rejects a sample.
+    NOTE: absolute thresholds are nearly unsatisfiable for small instruct
+    models (Qwen pristine refuses 0.94 of hard prompts). The real pass
+    signal is judge_min_improvement (pristine-relative delta)."""
+    judge_min_improvement: float = 0.05
+    """Min absolute refusal-rate improvement over pristine to pass
+    (pristine_refusal - abliterated_refusal >= this). 0.05 = 5pp."""
     judge_quality_threshold: float = 0.4
     """Quality-score threshold below which the judge rejects a sample."""
     judge_temperature: float = 0.0
@@ -250,6 +256,11 @@ class ModelConfig(BaseModel):
     """Enable the REFLEXION strategy-retry node."""
     reflexion_max_attempts: int = 3
     """Maximum reflexion retry attempts before giving up."""
+    pipeline_max_invocations: int = 3
+    """Hard cap on TOTAL graph.invoke calls in the runner. The in-graph
+    ouroboros/reflexion counters reset when reflexion routes back through
+    probe/distill (their state returns drop the counter), which caused
+    unbounded loops; this outer cap guarantees termination."""
     reflexion_db_path: str = "~/.absolver/experience.db"
     """SQLite path for the experience/strategy database."""
     reflexion_kb_paths: list[str] = Field(default_factory=list)

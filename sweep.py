@@ -59,7 +59,9 @@ def _build_candidates(cfg: Any, layer_types: list[str] | None = None) -> list[di
     methods = getattr(cfg, "sweep_methods", None) or [cfg.method]
     dir_methods = getattr(cfg, "sweep_dir_methods", None) or [cfg.dir_method]
     layer_sets = list(getattr(cfg, "sweep_layer_sets", None) or [[]])
-    alphas = list(getattr(cfg, "sweep_alphas", None) or [cfg.alpha])
+    explicit_alphas = getattr(cfg, "sweep_alphas", None)
+    alphas = list(explicit_alphas) if explicit_alphas else [cfg.alpha]
+    alphas_were_explicit = bool(explicit_alphas)
     passes = list(getattr(cfg, "sweep_passes", None) or [cfg.passes])
     weight_sets = list(getattr(cfg, "sweep_target_weights", None) or [[]])
 
@@ -95,17 +97,25 @@ def _build_candidates(cfg: Any, layer_types: list[str] | None = None) -> list[di
         # conv weights (non-hidden-shaped) corrupts the model.
         if any(_is_conv_layer(idx) for idx in ls):
             continue
-        candidate = {
-            "method": m,
-            "dir_method": dm,
-            "target_layers": ls,
-            "alpha": a,
-            "passes": p,
-            "target_weights": ws or list(cfg.target_weights),
-        }
-        # Skip candidates with no layers (they won't change anything)
-        if ls:
-            grid.append(candidate)
+        # Steering is an activation-level edit — it tolerates (and needs)
+        # much higher alphas than weight projection. If the sweep didn't
+        # explicitly configure alphas, give steering its own ladder.
+        if not alphas_were_explicit and m == "steering":
+            steering_alphas = [2.0, 4.0, 8.0, 10.0]
+        else:
+            steering_alphas = alphas
+        for sa in steering_alphas:
+            candidate = {
+                "method": m,
+                "dir_method": dm,
+                "target_layers": ls,
+                "alpha": sa,
+                "passes": p,
+                "target_weights": ws or list(cfg.target_weights),
+            }
+            # Skip candidates with no layers (they won't change anything)
+            if ls:
+                grid.append(candidate)
     return grid
 
 
@@ -379,6 +389,77 @@ def _apply_lora_delta(w: torch.Tensor, v: torch.Tensor, alpha: float) -> None:
     w.data.add_(delta.to(device=w.device, dtype=w.dtype))
 
 
+# Registry of steering hooks attached by the STEERING method. The sweep
+# restores weights between candidates, but hooks are NOT weights — they must
+# be explicitly removed, or they stack across candidates.
+_STEERING_HOOKS: list[Any] = []
+
+
+def _clear_steering_hooks() -> None:
+    """Remove all steering forward hooks (called before each new apply)."""
+    for h in _STEERING_HOOKS:
+        try:
+            h.remove()
+        except Exception:
+            pass
+    _STEERING_HOOKS.clear()
+
+
+def _apply_steering(model: Any, layers_mod, directions: dict, candidate: dict[str, Any]) -> None:
+    """Runtime activation steering: add alpha*d to the hidden state at each
+    target layer's output via a forward hook.
+
+    This is the method that actually works on small instruct models — the
+    user's standalone activation-steer.py showed 0/3 refusals at alpha=10.
+    It is non-destructive (no weight mutation), so pristine restoration is
+    just removing the hooks. 'alpha' here is the steering multiplier and can
+    go much higher (up to ~10) than weight-projection alphas.
+    """
+    import torch as _torch
+
+    _clear_steering_hooks()
+    for layer_idx in candidate["target_layers"]:
+        if layer_idx not in directions or layer_idx >= len(layers_mod):
+            continue
+        layer = layers_mod[layer_idx]
+        d = _as_1d(directions[layer_idx]).to(dtype=_torch.float32)
+        d = d / d.norm().clamp(min=1e-8)
+        alpha = float(candidate["alpha"])
+        steered = -d * alpha  # subtract the refusal direction at activation level
+
+        def make_hook(steer_vec: _torch.Tensor, block_idx: int):
+            def hook(module, args, output):
+                # output: [batch, seq, hidden] or tuple; steer the last token
+                # position (the one whose hidden state the refusal direction
+                # was extracted from).
+                if isinstance(output, tuple):
+                    out = output[0]
+                else:
+                    out = output
+                if out.dim() == 3:
+                    out[..., -1, :].add_(steer_vec.to(dtype=out.dtype, device=out.device))
+                elif out.dim() == 2:
+                    out.add_(steer_vec.to(dtype=out.dtype, device=out.device))
+                return output
+            return hook
+
+        # Hook the residual stream output of the block (what the next block
+        # consumes). Prefer 'mlp.down_proj' output as the post-MLP residual
+        # contribution; fall back to the block module itself.
+        hook_target = None
+        ff = getattr(layer, "mlp", None) or getattr(layer, "feed_forward", None)
+        if ff is not None and hasattr(ff, "down_proj"):
+            hook_target = ff.down_proj
+        elif hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
+            hook_target = layer.self_attn.o_proj
+        else:
+            hook_target = layer
+        h = hook_target.register_forward_hook(make_hook(d, layer_idx))
+        _STEERING_HOOKS.append(h)
+    logger.info("STEERING: attached hooks on %d layers, alpha=%.1f",
+                len(candidate["target_layers"]), float(candidate["alpha"]))
+
+
 def _apply_candidate(model: Any, directions: dict, pristine: dict | None,
                      candidate: dict[str, Any], good_dirs: dict | None = None) -> None:
     """Dispatch to the right method for one candidate."""
@@ -399,12 +480,19 @@ def _apply_candidate(model: Any, directions: dict, pristine: dict | None,
             _apply_projected_abliteration(model, layers_mod, directions, good_dirs or {}, candidate)
         elif method == "lora":
             _apply_lora_abliteration(model, layers_mod, directions, candidate)
+        elif method == "steering":
+            _apply_steering(model, layers_mod, directions, candidate)
         else:
             logger.warning("SWEEP: unknown method %s, falling back to advanced", method)
             _apply_advanced(model, layers_mod, directions, candidate)
         # For passes > 1, restore and re-apply
         if i < passes - 1 and pristine is not None:
             _restore(model, pristine)
+    # Steering hooks persist across candidates unless cleared; the next
+    # _apply_steering call clears them, but ensure a non-steering candidate
+    # after a steering one doesn't carry stale hooks.
+    if method != "steering":
+        _clear_steering_hooks()
 
 
 # ---------------------------------------------------------------------------

@@ -82,9 +82,12 @@ def reflexion_node(state: AbliterationState) -> dict:
     # Pick the next strategy from the fallback ladder.
     # ------------------------------------------------------------------ #
     fallback_strategies = cfg.reflexion_strategy_space or [
-        "expand_prompts",
-        "switch_dir_method",
+        "switch_method",        # weight-projection didn't move refusal → try steering/lora/bias
+        "increase_alpha",       # same method, push alpha harder (steering works at alpha 10)
+        "expand_prompts",       # more prompts = more signal for the sweep
+        "switch_dir_method",    # paired vs diff_means vs svd directions
         "adjust_alpha",
+        "change_weights",       # o_proj -> o_proj+down_proj etc.
         "expand_target_layers",
         "skip_model",
     ]
@@ -135,6 +138,9 @@ def reflexion_node(state: AbliterationState) -> dict:
         "expand_prompts": "probe",
         "switch_dir_method": "distill",
         "adjust_alpha": "excise",
+        "increase_alpha": "excise",
+        "switch_method": "excise",
+        "change_weights": "excise",
         "expand_target_layers": "distill",
         "skip_model": "rebirth",
     }

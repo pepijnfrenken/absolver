@@ -979,6 +979,7 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
     #      delta under identical conditions is the true capability impact.
     # ------------------------------------------------------------------ #
     pristine_scores: dict[str, float] = {}
+    pristine_refusal: float | None = None
     pristine = state.get("pristine_state_dict")
     if (
         getattr(cfg, "verify_pristine_baseline", True)
@@ -1006,11 +1007,40 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
                     pristine_scores[bench_name] = runner(model, tok, n=bench_sample_n)
                 except Exception as exc:
                     logger.warning("Pristine benchmark '%s' failed: %s", bench_name, exc)
+
+            # Measure pristine refusal baseline: the model is currently
+            # pristine, so run the harmful judge prompts and keyword-score
+            # them. This gives the delta gate its reference point ("the edit
+            # improved on pristine by X") — small instruct models refuse
+            # ~94% of hard prompts natively, so absolute thresholds are
+            # unsatisfiable but DELTAS are meaningful.
+            try:
+                from judge import _keyword_refusal_score
+                hfmt = detect_prompt_format(tok, getattr(cfg, "prompt_format", "auto"))
+                harm_prompts = list(state.get("harmful_prompts") or [])[: getattr(cfg, "judge_prompts", 20)]
+                n_ref = 0
+                for p in harm_prompts:
+                    formatted = format_prompt(tok, p, hfmt)
+                    inp = tok(formatted, return_tensors="pt", truncation=True,
+                              max_length=cfg.max_seq_len).to(_model_device(model))
+                    with torch.no_grad():
+                        out = model.generate(**inp, max_new_tokens=64, do_sample=False)
+                    resp = tok.decode(out[0], skip_special_tokens=True)
+                    if _keyword_refusal_score(resp) > 0.5:
+                        n_ref += 1
+                pristine_refusal = n_ref / max(1, len(harm_prompts))
+                logger.info("PRISTINE refusal baseline: %d/%d = %.3f (keyword)",
+                            n_ref, len(harm_prompts), pristine_refusal)
+            except Exception as exc:
+                logger.warning("Pristine refusal baseline failed: %s", exc)
+                pristine_refusal = None
+
             model.load_state_dict({
                 k: v.to(device=dev) if isinstance(v, _torch.Tensor) else v
                 for k, v in ab_snapshot.items()
             })
             logger.info("PRISTINE baseline: %s", {k: round(v, 4) for k, v in pristine_scores.items()})
+            logger.info("PRISTINE refusal rate: %s", pristine_refusal)
         except Exception as exc:
             logger.warning("Pristine baseline failed: %s", exc)
             pristine_scores = {}
@@ -1056,6 +1086,7 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
         "quality_pass": quality_pass,
         "benchmark_scores": benchmark_scores,
         "pristine_scores": pristine_scores,
+        "pristine_refusal_rate": pristine_refusal,
         "behavior_report": behavior_report,
     }
 
