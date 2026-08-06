@@ -42,22 +42,27 @@ def _step_alpha_search(cfg: Any, state: AbliterationState) -> tuple[float, dict]
 
     Machine (one call == one reflexion pass, pinned to 'increase_alpha'):
 
-      1. If the search already finished, return its best alpha unchanged
-         (idempotent — never restarts a converged search).
-      2. No ``current`` yet -> this is the first midpoint: propose
+      1. If the search already converged, return its chosen best unchanged
+         (idempotent - never restarts a finished search).
+      2. No ``current`` yet -> this is the first test: propose
          ``mid0 = (lo + hi) / 2`` and dispatch that alpha to the next sweep.
       3. Otherwise the midpoint in ``current`` has just finished the
          excise->verify->judge cycle; read its outcome from state and
-           - quality below threshold        -> too strong -> ``hi = current``
-         - else refusal above the threshold -> too weak  -> ``lo = current``
-         - else (both acceptable) -> we can go stronger, so ``lo = current``
-           (keep chasing the accepted-quality ceiling for lower refusal).
+           - quality below threshold -> too strong -> ``hi = current``
+           - else refusal above the threshold -> too weak -> ``lo = current``
+           - else (pass / both acceptable) -> we can go stronger, so
+             ``lo = current`` (keep chasing the accepted-quality ceiling;
+             a PASS does NOT end the search).
          The outcome is always recorded in ``tested``.
-      4. If we have fewer than ``reflexion_alpha_search_iters`` tested alphas
-         and a meaningful window remains, propose ``mid = (lo + hi) / 2``.
-      5. Else converge: pick the best candidate (lowest refusal among those
-         with quality >= judge_quality_threshold; otherwise the lowest-refusal
-         one) and return it with ``done = True``.
+      4. If ``len(tested) < reflexion_alpha_search_iters`` AND the window is
+         still wider than ``reflexion_alpha_search_eps``, propose the next
+         midpoint ``mid = (lo + hi) / 2`` and keep searching. Otherwise the
+         search has converged -> go to step 5.
+      5. Converged: pick the best candidate (step 6 below), mark ``done``
+         and return it so the caller runs a confirmatory EXCISE before REBIRTH.
+
+    ``done = True`` is set ONLY by convergence (window tolerance or iteration
+    budget), never by a passing verdict.
 
     Returns ``(alpha_to_test, new_search_state)``.
     """
@@ -103,26 +108,33 @@ def _step_alpha_search(cfg: Any, state: AbliterationState) -> tuple[float, dict]
     lo = min(lo, float(cfg.alpha_search_hi))
     hi = max(hi, float(cfg.alpha_search_lo))
 
-    # 4) Keep searching while budget remains and the window is meaningful.
-    cap = int(getattr(cfg, "reflexion_alpha_search_iters", 5))
-    if len(tested) < cap and (hi - lo) > 1e-6:
+    # 4) Keep searching while the budget remains and the window is still wider
+    #    than the convergence tolerance. A passing verdict already set
+    #    lo = current (hunt toward the quality ceiling); only convergence below
+    #    eps or hitting the iteration budget stops the search.
+    cap = int(getattr(cfg, "reflexion_alpha_search_iters", 10))
+    eps = float(getattr(cfg, "reflexion_alpha_search_eps", 0.01))
+    if len(tested) < cap and (hi - lo) >= eps:
         mid = (lo + hi) / 2.0
         search.update(lo=lo, hi=hi, current=mid, tested=tested, done=False)
         return mid, search
 
-    # 5) Converge on the best alpha seen.
+    # 5) Converged: pick the best viable alpha and mark the search done.
     search.update(lo=lo, hi=hi, current=None, tested=tested, done=True)
     best = _best_seen(tested, cfg)
     return best, search
 
 
 def _best_seen(tested: list, cfg: Any) -> float:
-    """Lowest-refusal alpha among those with acceptable quality; otherwise the
-    lowest-refusal alpha overall."""
+    """Highest viable alpha: among tested midpoints that keep quality at or
+    above ``judge_quality_threshold`` choose the LARGEST alpha (the strongest
+    steer that still passes quality), since refusal is monotonic-decreasing in
+    alpha. If no candidate keeps quality, fall back to the largest alpha
+    overall (strongest steer even at a quality cost)."""
     threshold = float(getattr(cfg, "judge_quality_threshold", 0.4))
     good = [t for t in tested if t["quality"] >= threshold]
     pool = good if good else tested
-    return min(pool, key=lambda t: (t["refusal"], -t["quality"]))["alpha"]
+    return max(pool, key=lambda t: t["alpha"])["alpha"]
 
 
 def reflexion_node(state: AbliterationState) -> dict:

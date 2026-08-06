@@ -8,6 +8,34 @@ from __future__ import annotations
 
 from state import AbliterationState
 
+
+def _alpha_search_active(state: AbliterationState, cfg) -> bool:
+    """True if the binary alpha search is active and NOT yet converged.
+
+    Used by the judge router so a 'pass' verdict keeps the search looping
+    (midpoint -> excise -> judge -> reflexion) until the window closes,
+    instead of prematurely ending at the first passing alpha.
+    """
+    if not getattr(cfg, "reflexion_alpha_binary_search", False):
+        return False
+    if not getattr(cfg, "reflexion_enabled", False):
+        return False
+    search = state.get("alpha_search")
+    if not search:
+        return False
+    # Converged: explicitly finished, window below tolerance, or out of budget.
+    if search.get("done"):
+        return False
+    hi = float(search.get("hi", 0))
+    lo = float(search.get("lo", 0))
+    eps = float(getattr(cfg, "reflexion_alpha_search_eps", 0.01))
+    if (hi - lo) < eps:
+        return False
+    if len(search.get("tested", []) or []) >= int(getattr(cfg, "reflexion_alpha_search_iters", 10)):
+        return False
+    return True
+
+
 def route_after_verify(state: AbliterationState) -> str:
     """Pick the next node after VERIFY (judge disabled path).
 
@@ -36,15 +64,19 @@ def route_after_verify(state: AbliterationState) -> str:
 def route_after_judge(state: AbliterationState) -> str:
     """Pick the next node after JUDGE, based on ``judge_verdict``.
 
-    - ``pass``          -> ``rebirth``
+    - ``pass``          -> ``reflexion`` while a binary alpha search is active
+                           and unconverged (keeps hunting for the quality
+                           ceiling); otherwise ``rebirth``.
     - ``fail_refusal``  -> ``excise`` if under the ouroboros cap, else
-                            ``reflexion`` (if enabled)
+      ``reflexion`` (if enabled)
     - ``fail_quality``  -> ``reflexion`` (if enabled)
     - anything else     -> ``rebirth``
     """
     cfg = state["config"]
     verdict = state.get("judge_verdict", "pass")
     if verdict == "pass":
+        if _alpha_search_active(state, cfg):
+            return "reflexion"
         return "rebirth"
     if verdict == "fail_refusal":
         if state.get("ouroboros_count", 0) < cfg.max_ouroboros_passes:
