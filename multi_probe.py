@@ -2,7 +2,7 @@
 Phase 1: Multi-direction probe — collect hidden states for 5 data categories.
 Run once, save all activations to disk for analysis.
 """
-import modal, torch, os, sys, json, time
+import modal, torch, os, json
 from pathlib import Path
 from collections import defaultdict
 
@@ -125,7 +125,7 @@ def multi_probe():
     with open("/tmp/multi_probe_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
-    print(f"\nSaved to /tmp/multi_probe_acts.json and /tmp/multi_probe_summary.json")
+    print("\nSaved to /tmp/multi_probe_acts.json and /tmp/multi_probe_summary.json")
     print(f"Categories: {list(all_acts.keys())}")
     return summary["harmful"]["23"]["mean_norm"]  # quick sanity
 

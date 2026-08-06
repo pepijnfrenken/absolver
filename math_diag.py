@@ -44,10 +44,10 @@ def diagnose():
         
         print(f"\n=== Problem {i}: {answer=} ===")
         print(f"FULL RESPONSE:\n{resp[:500]}")
-        print(f"\n--- Last 3 lines ---")
+        print("\n--- Last 3 lines ---")
         for line in resp.split("\n")[-3:]:
             print(f"  [{line.strip()}]")
-        print(f"\n--- Boxed regex match ---")
+        print("\n--- Boxed regex match ---")
         m = re.search(r'\\boxed\{([^}]+)\}', resp)
         print(f"  Match: {m.group(1) if m else 'NONE'}")
         

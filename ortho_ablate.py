@@ -2,7 +2,7 @@
 Phase 2: Orthogonalized ablation — remove only the refusal component
 that is NOT shared with capability directions (MATH, BBH, GPQA).
 """
-import modal, torch, os, sys, json, time, copy
+import modal, torch, os, sys, json
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -23,7 +23,6 @@ app = modal.App("ortho-ablate-v1")
 def ortho_ablate():
     os.chdir("/absolver")
     sys.path.insert(0, "/absolver")
-    import numpy as np
     from transformers import AutoModelForCausalLM, AutoTokenizer
     from datasets import load_dataset
     from collections import defaultdict

@@ -8,27 +8,6 @@ from __future__ import annotations
 
 from state import AbliterationState
 
-
-def route_after_distill(state: AbliterationState) -> str:
-    """Pick the next node after DISTILL.
-
-    - Best separation below the configured threshold means the directions
-      are not good enough yet. If REFLEXION is enabled and we have already
-      retried ``>= reflexion_max_attempts`` times, escalate to ``reflexion``; otherwise
-      ``probe`` to harvest fresh activations.
-    - Otherwise proceed to ``excise``.
-    """
-    scores = state.get("separation_scores") or {}
-    max_score = max(scores.values()) if scores else 0.0
-    cfg = state["config"]
-    attempts = state.get("reflexion_attempts", 0)
-    if max_score < cfg.separation_threshold:
-        if cfg.reflexion_enabled and attempts >= cfg.reflexion_max_attempts:
-            return "reflexion"
-        return "probe"
-    return "excise"
-
-
 def route_after_verify(state: AbliterationState) -> str:
     """Pick the next node after VERIFY (judge disabled path).
 

@@ -683,23 +683,6 @@ def run_mmlu_mini(model: Any, tok: Any, n: int = 50) -> float:
     return correct / total if total else 0.0
 
 
-def _cuda_ready_for_mmlu(min_free_bytes: int = 2 * 1024 ** 3) -> bool:
-    """Return True only when CUDA is available and has enough free memory.
-
-    We require both ``torch.cuda.is_available()`` and at least
-    ``min_free_bytes`` of unallocated GPU memory (default 2 GiB), so we can
-    run MMLU inference without OOM even when a large model is loaded.
-    On CPU-only environments this always returns False, so MMLU is skipped.
-    """
-    try:
-        if not torch.cuda.is_available():
-            return False
-        free, _total = torch.cuda.mem_get_info()
-        return free >= min_free_bytes
-    except Exception:  # pragma: no cover — defensive
-        return False
-
-
 # ---------------------------------------------------------------------- #
 # Multi-choice helper (shared by arc_easy, hellaswag)
 # ---------------------------------------------------------------------- #
@@ -990,55 +973,60 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
         try:
             import torch as _torch
             dev = _model_device(model)
-            # Snapshot abliterated weights, load pristine, run benchmarks.
+            # Snapshot abliterated weights, then load pristine and evaluate.
             ab_snapshot = {
                 k: v.clone().cpu() if isinstance(v, _torch.Tensor) else v
                 for k, v in model.state_dict().items()
             }
-            model.load_state_dict({
-                k: v.to(device=dev) if isinstance(v, _torch.Tensor) else v
-                for k, v in pristine.items()
-            })
-            for bench_name in requested:
-                runner = _RUNNER.get(bench_name)
-                if runner is None:
-                    continue
-                try:
-                    pristine_scores[bench_name] = runner(model, tok, n=bench_sample_n)
-                except Exception as exc:
-                    logger.warning("Pristine benchmark '%s' failed: %s", bench_name, exc)
-
-            # Measure pristine refusal baseline: the model is currently
-            # pristine, so run the harmful judge prompts and keyword-score
-            # them. This gives the delta gate its reference point ("the edit
-            # improved on pristine by X") — small instruct models refuse
-            # ~94% of hard prompts natively, so absolute thresholds are
-            # unsatisfiable but DELTAS are meaningful.
             try:
-                from judge import _keyword_refusal_score
-                hfmt = detect_prompt_format(tok, getattr(cfg, "prompt_format", "auto"))
-                harm_prompts = list(state.get("harmful_prompts") or [])[: getattr(cfg, "judge_prompts", 20)]
-                n_ref = 0
-                for p in harm_prompts:
-                    formatted = format_prompt(tok, p, hfmt)
-                    inp = tok(formatted, return_tensors="pt", truncation=True,
-                              max_length=cfg.max_seq_len).to(_model_device(model))
-                    with torch.no_grad():
-                        out = model.generate(**inp, max_new_tokens=64, do_sample=False)
-                    resp = tok.decode(out[0], skip_special_tokens=True)
-                    if _keyword_refusal_score(resp) > 0.5:
-                        n_ref += 1
-                pristine_refusal = n_ref / max(1, len(harm_prompts))
-                logger.info("PRISTINE refusal baseline: %d/%d = %.3f (keyword)",
-                            n_ref, len(harm_prompts), pristine_refusal)
-            except Exception as exc:
-                logger.warning("Pristine refusal baseline failed: %s", exc)
-                pristine_refusal = None
+                model.load_state_dict({
+                    k: v.to(device=dev) if isinstance(v, _torch.Tensor) else v
+                    for k, v in pristine.items()
+                })
+                for bench_name in requested:
+                    runner = _RUNNER.get(bench_name)
+                    if runner is None:
+                        continue
+                    try:
+                        pristine_scores[bench_name] = runner(model, tok, n=bench_sample_n)
+                    except Exception as exc:
+                        logger.warning("Pristine benchmark '%s' failed: %s", bench_name, exc)
 
-            model.load_state_dict({
-                k: v.to(device=dev) if isinstance(v, _torch.Tensor) else v
-                for k, v in ab_snapshot.items()
-            })
+                # Measure pristine refusal baseline: the model is currently
+                # pristine, so run the harmful prompts and keyword-score them.
+                # This gives the delta gate its reference point ("the edit
+                # improved on pristine by X") — small instruct models refuse
+                # ~94% of hard prompts natively, so absolute thresholds are
+                # unsatisfiable but DELTAS are meaningful.
+                try:
+                    from judge import _keyword_refusal_score
+                    hfmt = detect_prompt_format(tok, getattr(cfg, "prompt_format", "auto"))
+                    harm_prompts = list(state.get("harmful_prompts") or [])[: getattr(cfg, "judge_prompts", 20)]
+                    n_ref = 0
+                    for p in harm_prompts:
+                        formatted = format_prompt(tok, p, hfmt)
+                        inp = tok(formatted, return_tensors="pt", truncation=True,
+                                  max_length=cfg.max_seq_len).to(_model_device(model))
+                        with torch.no_grad():
+                            out = model.generate(**inp, max_new_tokens=64, do_sample=False)
+                        resp = tok.decode(out[0], skip_special_tokens=True)
+                        if _keyword_refusal_score(resp) > 0.5:
+                            n_ref += 1
+                    pristine_refusal = n_ref / max(1, len(harm_prompts))
+                    logger.info("PRISTINE refusal baseline: %d/%d = %.3f (keyword)",
+                                n_ref, len(harm_prompts), pristine_refusal)
+                except Exception as exc:
+                    logger.warning("Pristine refusal baseline failed: %s", exc)
+                    pristine_refusal = None
+            finally:
+                # Always restore the abliterated weights — even if a pristine
+                # benchmark raised — otherwise the pristine model leaks into
+                # the rest of VERIFY and downstream nodes.
+                if ab_snapshot:
+                    model.load_state_dict({
+                        k: v.to(device=dev) if isinstance(v, _torch.Tensor) else v
+                        for k, v in ab_snapshot.items()
+                    })
             logger.info("PRISTINE baseline: %s", {k: round(v, 4) for k, v in pristine_scores.items()})
             logger.info("PRISTINE refusal rate: %s", pristine_refusal)
         except Exception as exc:

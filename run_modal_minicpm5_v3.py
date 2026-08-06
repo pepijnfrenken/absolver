@@ -40,7 +40,7 @@ HUB_REPO = "PinoCookie/MiniCPM5-1B-abliterated"
     secrets=[modal.Secret.from_name("huggingface-token")],
 )
 def abliterate_and_benchmark() -> dict:
-    import json, os, sys, time, gc
+    import json, os, sys, time
     import torch
     import yaml
     from collections import defaultdict

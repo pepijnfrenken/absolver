@@ -89,7 +89,7 @@ def _write_model_card(output_dir: Path, state: AbliterationState, cfg: Any) -> N
             "SWEEP → EXCISE → VERIFY → JUDGE → REBIRTH.",
             "",
             "## Method",
-            f"- Pipeline: SUMMON → PROBE → DISTILL → SWEEP → EXCISE → VERIFY → JUDGE → REBIRTH (LangGraph)",
+            "- Pipeline: SUMMON → PROBE → DISTILL → SWEEP → EXCISE → VERIFY → JUDGE → REBIRTH (LangGraph)",
             f"- Method: {method_name} (sweep-selected across advanced / mpoa / bias_vectors / direct_ablation / projected / lora)",
             f"- Direction extraction: {dir_method}, 3 directions",
             f"- Projection strength α = {alpha}, {passes} pass(es)",

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Upload runner + config to Molab, then fire the pipeline."""
-import sys, os, base64, json, requests
+import sys, base64, requests
 
 URL = sys.argv[1]
 TOKEN = sys.argv[2]

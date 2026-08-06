@@ -7,7 +7,6 @@ through DISTILL and EXCISE, then asserts:
 - all four dir_method options run without error
 """
 from __future__ import annotations
-from model_registry import set_model
 from model_registry import get_model
 
 import pytest

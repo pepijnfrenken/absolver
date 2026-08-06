@@ -2,7 +2,7 @@
 Input-space probing: hook into o_proj and down_proj INPUTS (not layer output).
 This gives independent direction vectors in each module's native input space.
 """
-import modal, torch, os, sys, json, time
+import modal, torch, os, sys
 from pathlib import Path
 from collections import defaultdict
 

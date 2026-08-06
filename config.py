@@ -291,20 +291,6 @@ class ModelConfig(BaseModel):
     """Create the target hub repo as private if it does not exist."""
 
     # ------------------------------------------------------------------ #
-    # Platform (local | modal | molab)
-    # ------------------------------------------------------------------ #
-    platform: str = "local"
-    """Execution platform: 'local', 'modal', or 'molab'."""
-    modal_gpu: str = "L4"
-    """Modal GPU class: 'L4', 'A10G', 'A100', or 'H100'."""
-    modal_timeout: int = 7200
-    """Modal function timeout in seconds."""
-    molab_url: str | None = None
-    """Molab endpoint URL (or MOLAB_URL env var)."""
-    molab_token: str | None = None
-    """Molab API bearer token (or MOLAB_TOKEN env var)."""
-
-    # ------------------------------------------------------------------ #
     # Misc
     # ------------------------------------------------------------------ #
     seed: int = 42

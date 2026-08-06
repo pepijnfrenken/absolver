@@ -16,7 +16,6 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Optional
 
 _PROJECT_DIR = Path(__file__).resolve().parent.parent
 
@@ -170,7 +169,7 @@ def _create_app() -> object:
         os.environ["ABSOLVER_GPU"] = args.gpu
         os.environ["ABSOLVER_TIMEOUT"] = str(args.timeout)
 
-        result = run_pipeline_modal_fn.remote(args.config)
+        run_pipeline_modal_fn.remote(args.config)
         print("\n✅ Done. Result saved.")
 
     return app

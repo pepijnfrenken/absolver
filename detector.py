@@ -39,33 +39,6 @@ class UnsupportedArchitecture(Exception):
 _LAYER_RE = re.compile(r".*layers\.(\d+)$")
 
 
-def _is_meta(module: Any) -> bool:
-    """True if `module` has parameters/buffers that all live on the meta device
-    (or that have no real storage), meaning we cannot inspect them directly."""
-    try:
-        params = list(module.parameters(recurse=False))
-        buffers = list(module.buffers(recurse=False))
-    except Exception:
-        return False
-    if not params and not buffers:
-        # Fall back to recursion: a parent w/o own params can still hold meta
-        # tensors in children. Only consider "leaf-ish" modules here.
-        try:
-            for p in module.parameters(recurse=True):
-                if p.is_meta:
-                    return True
-        except Exception:
-            return False
-        return False
-    for p in params:
-        if getattr(p, "is_meta", False):
-            return True
-    for b in buffers:
-        if getattr(b, "is_meta", False):
-            return True
-    return False
-
-
 def _to_cpu(module: Any) -> Any:
     """Move a small inspection module to CPU so we can introspect it.
 

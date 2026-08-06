@@ -1,7 +1,6 @@
 """LangGraph assembly — tensor-safe via msgpack default handler monkey-patch."""
 from __future__ import annotations
 
-from functools import wraps
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph

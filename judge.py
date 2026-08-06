@@ -4,7 +4,6 @@ from model_registry import get_model, get_tokenizer
 
 import json
 import logging
-import os
 import re
 from typing import Any
 

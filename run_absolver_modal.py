@@ -178,9 +178,16 @@ def evaluate_sweep_candidate(payload: dict) -> dict:
 
         _apply_candidate(model, directions, None, cand, None)
 
-        # Quick-score: generate on a handful of harmful prompts.
+        # Quick-score: generate on a handful of harmful prompts. The scorer
+        # needs a config-like object for max_seq_len (only); build a minimal
+        # one from the host-supplied probe_cfg. Passing cfg=None here used to
+        # crash the parallel path with 'NoneType' has no attribute
+        # 'max_seq_len', hiding every parallel candidate behind the except.
         prompts = list(DEFAULT_HARMFUL)[: probe_cfg.get("n_verify_prompts", 10)]
-        score = _quick_score(model, tok, None, prompts, base_logprobs=None)
+        _score_cfg = type("SweepScoreCfg", (), {
+            "max_seq_len": probe_cfg.get("max_seq_len", 1024),
+        })()
+        score = _quick_score(model, tok, _score_cfg, prompts, base_logprobs=None)
         return score
     except Exception as exc:
         import traceback

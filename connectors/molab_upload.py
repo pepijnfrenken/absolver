@@ -1,5 +1,5 @@
 """Upload a local file to the Molab remote filesystem by chunking base64."""
-import sys, os, base64, time
+import sys, os, base64
 sys.path.insert(0, os.path.dirname(__file__))
 from molab_exec import molab_exec
 

@@ -13,6 +13,20 @@ from llm_api import chat_completion
 from prompts import REFLEXION_KB_PROMPT_TEMPLATE
 from state import AbliterationState
 
+# Rotation orders for the "structural retry" strategies. These make the
+# otherwise-no-op fallback actions real: e.g. switch_method actually moves the
+# pipeline onto a different ablation method before re-running EXCISE.
+_METHOD_ROTATION: list[str] = [
+    "steering", "mpoa", "lora", "bias_vectors",
+    "direct_ablation", "projected", "advanced",
+]
+_ALPHA_LADDER: list[float] = [2.0, 4.0, 8.0, 10.0, 20.0]
+_WEIGHT_TOGGLES: list[list[str]] = [
+    ["o_proj"],
+    ["down_proj"],
+    ["o_proj", "down_proj"],
+]
+
 
 def reflexion_node(state: AbliterationState) -> dict:
     """Choose a retry strategy and the next node for a stalled run."""
@@ -147,18 +161,20 @@ def reflexion_node(state: AbliterationState) -> dict:
     next_action = action_map.get(strategy, "rebirth")
 
     # ------------------------------------------------------------------ #
-    # Build the return dict.
+    # Build the return dict. The per-attempt history entry is kept as a
+    # mutable local so the strategy branches below can annotate it with the
+    # concrete mutation they applied (tried_method / alpha / target_weights)
+    # for cross-attempt bookkeeping (switch_method skips these).
     # ------------------------------------------------------------------ #
+    history_entry = {
+        "attempt": attempt,
+        "strategy": strategy,
+        "reason": f"sep={max_sep:.1f}, refusal={refusal:.2f}, quality={quality:.2f}",
+        "kb_llm": kb_llm,
+    }
     ret: dict = {
         "reflexion_attempts": attempt,
-        "reflexion_history": (state.get("reflexion_history", []) or []) + [
-            {
-                "attempt": attempt,
-                "strategy": strategy,
-                "reason": f"sep={max_sep:.1f}, refusal={refusal:.2f}, quality={quality:.2f}",
-                "kb_llm": kb_llm,
-            }
-        ],
+        "reflexion_history": (state.get("reflexion_history", []) or []) + [history_entry],
         "reflexion_current_strategy": strategy,
         "reflexion_llm_suggestion": kb_llm,
         "reflexion_chosen_action": next_action,
@@ -199,6 +215,36 @@ def reflexion_node(state: AbliterationState) -> dict:
             expanded = list(set(existing) | all_layers)
             expanded.sort()
             ret["target_layers"] = expanded
+    elif strategy == "switch_method":
+        # Move the pipeline onto the next untried ablation method and restrict
+        # the next sweep to exactly that method (so EXCISE actually tests it).
+        tried = {
+            h.get("tried_method")
+            for h in (state.get("reflexion_history", []) or [])
+            if h.get("tried_method")
+        }
+        tried |= {cfg.method, state.get("method"), None}
+        nxt_method = next((m for m in _METHOD_ROTATION if m not in tried), None)
+        if nxt_method is not None:
+            ret["config"] = cfg.model_copy(update=dict(
+                method=nxt_method, sweep_methods=[nxt_method],
+            ))
+            history_entry["tried_method"] = nxt_method
+    elif strategy == "increase_alpha":
+        # Push alpha up a fixed ladder and force the next sweep to test that
+        # specific value (steering in particular needs high alphas).
+        next_alpha = next((a for a in _ALPHA_LADDER if a > cfg.alpha), _ALPHA_LADDER[-1])
+        ret["config"] = cfg.model_copy(update=dict(
+            alpha=next_alpha, sweep_alphas=[next_alpha],
+        ))
+        history_entry["alpha"] = next_alpha
+    elif strategy == "change_weights":
+        # Cycle which modules get projected: o_proj -> down_proj -> both.
+        cur = set(cfg.target_weights or [])
+        idx = next((i for i, w in enumerate(_WEIGHT_TOGGLES) if set(w) == cur), 0)
+        nxt_weights = _WEIGHT_TOGGLES[(idx + 1) % len(_WEIGHT_TOGGLES)]
+        ret["config"] = cfg.model_copy(update=dict(target_weights=list(nxt_weights)))
+        history_entry["target_weights"] = list(nxt_weights)
     elif strategy == "skip_model":
         ret["reflexion_final_verdict"] = "incompatible"
 

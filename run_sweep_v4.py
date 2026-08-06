@@ -29,7 +29,7 @@ app = modal.App("absolver-minicpm5-v4-sweep")
 @app.function(image=image, gpu="L4", timeout=3600,
               secrets=[modal.Secret.from_name("huggingface-token")])
 def run_sweep() -> dict:
-    import json, os, sys, time, copy, gc
+    import json, os, sys, time
     import torch
     from collections import defaultdict
 

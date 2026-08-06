@@ -33,8 +33,6 @@ from verify import REFUSAL_KEYWORDS
 from excise import (
     _project_2d,
     _project_2d_mpoa,
-    _project_3d_expert,
-    _project_3d_expert_mpoa,
 )
 from distill import extract_directions
 from state import AbliterationState
@@ -98,13 +96,17 @@ def _build_candidates(cfg: Any, layer_types: list[str] | None = None) -> list[di
         if any(_is_conv_layer(idx) for idx in ls):
             continue
         # Steering is an activation-level edit — it tolerates (and needs)
-        # much higher alphas than weight projection. If the sweep didn't
-        # explicitly configure alphas, give steering its own ladder.
-        if not alphas_were_explicit and m == "steering":
-            steering_alphas = [2.0, 4.0, 8.0, 10.0]
+        # much wider alphas than weight projection. If the sweep didn't
+        # explicitly configure sweep_alphas, give the steering cells their
+        # own ladder. Every other cell uses the product cell's alpha `a` —
+        # NOT the whole alphas list — otherwise each candidate is emitted
+        # once per configured alpha (the grid doubled whenever more than one
+        # sweep_alpha was set).
+        if m == "steering" and not alphas_were_explicit:
+            cell_alphas = [2.0, 4.0, 8.0, 10.0]
         else:
-            steering_alphas = alphas
-        for sa in steering_alphas:
+            cell_alphas = [a]
+        for sa in cell_alphas:
             candidate = {
                 "method": m,
                 "dir_method": dm,
@@ -124,7 +126,15 @@ def _build_candidates(cfg: Any, layer_types: list[str] | None = None) -> list[di
 # ---------------------------------------------------------------------------
 
 def _restore(model: Any, pristine: dict[str, torch.Tensor]) -> None:
-    """Load pristine weights back into the model (CPU->device as needed)."""
+    """Load pristine weights back into the model (CPU->device as needed).
+
+    Also detaches any lingering STEERING forward hooks. Hooks are not
+    weights and survive ``load_state_dict``; if the last evaluated candidate
+    was a steering candidate their tensors keep mutating the residual stream
+    into the next candidate (and into downstream EXCISE/VERIFY runs). We
+    clear them unconditionally so a restore always returns a clean model.
+    """
+    _clear_steering_hooks()
     # nn.Module has no .device attribute — infer from the first parameter.
     try:
         target_device = next(model.parameters()).device
@@ -157,7 +167,7 @@ def _dispatch_parallel_candidate(cand: dict, directions: dict, state: Any, cfg: 
     try:
         import modal
         # Host-side: build the same App/function the runner exposes.
-        from run_absolver_modal import app, evaluate_sweep_candidate
+        from run_absolver_modal import evaluate_sweep_candidate
 
         # Directions must be plain data for modal.map serialization.
         dirs_plain = {
@@ -177,7 +187,7 @@ def _dispatch_parallel_candidate(cand: dict, directions: dict, state: Any, cfg: 
             },
         }
         # modal.map runs each payload in its own container, ~10 concurrent.
-        with modal.environ() as _env:
+        with modal.environ():
             out = list(map(evaluate_sweep_candidate.remote, [payload]))
         score = out[0] or {}
         return {**cand, **score, "objective": float(score.get("objective", -9.0))}
@@ -425,6 +435,10 @@ def _apply_steering(model: Any, layers_mod, directions: dict, candidate: dict[st
         d = _as_1d(directions[layer_idx]).to(dtype=_torch.float32)
         d = d / d.norm().clamp(min=1e-8)
         alpha = float(candidate["alpha"])
+        # The actual steering vector: subtract the (normalized) refusal
+        # direction, scaled by alpha. The hook below must receive THIS vector —
+        # passing the raw unit `d` instead made alpha a no-op (and steered the
+        # WRONG sign), so a candidate's 'alpha' never affected the result.
         steered = -d * alpha  # subtract the refusal direction at activation level
 
         def make_hook(steer_vec: _torch.Tensor, block_idx: int):
@@ -454,7 +468,7 @@ def _apply_steering(model: Any, layers_mod, directions: dict, candidate: dict[st
             hook_target = layer.self_attn.o_proj
         else:
             hook_target = layer
-        h = hook_target.register_forward_hook(make_hook(d, layer_idx))
+        h = hook_target.register_forward_hook(make_hook(steered, layer_idx))
         _STEERING_HOOKS.append(h)
     logger.info("STEERING: attached hooks on %d layers, alpha=%.1f",
                 len(candidate["target_layers"]), float(candidate["alpha"]))

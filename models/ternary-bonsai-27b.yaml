@@ -19,7 +19,6 @@ reflexion_max_attempts: 3
 # Probing
 n_probe_prompts: 20
 max_seq_len: 512
-probe_batch_size: 4
 
 # Verification
 verify_sample_size: 0
