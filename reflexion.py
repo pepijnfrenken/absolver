@@ -8,6 +8,7 @@ the flow to the appropriate downstream node (probe / distill / excise / rebirth)
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from llm_api import chat_completion
 from prompts import REFLEXION_KB_PROMPT_TEMPLATE
@@ -28,6 +29,102 @@ _WEIGHT_TOGGLES: list[list[str]] = [
 ]
 
 
+def _step_alpha_search(cfg: Any, state: AbliterationState) -> tuple[float, dict]:
+    """Advance the alpha binary search by one reflexion iteration.
+
+    Persisted search state (``state['alpha_search']``) is a dict:
+      ``lo``, ``hi``  bounds of the current search window,
+      ``current``     the alpha handed to the LAST EXCISE cycle, or None if the
+                      search has not tested anything yet,
+      ``tested``      list of ``{"alpha": float, "refusal": float,
+                      "quality": float}`` outcomes already observed,
+      ``done``        True once the search converged.
+
+    Machine (one call == one reflexion pass, pinned to 'increase_alpha'):
+
+      1. If the search already finished, return its best alpha unchanged
+         (idempotent — never restarts a converged search).
+      2. No ``current`` yet -> this is the first midpoint: propose
+         ``mid0 = (lo + hi) / 2`` and dispatch that alpha to the next sweep.
+      3. Otherwise the midpoint in ``current`` has just finished the
+         excise->verify->judge cycle; read its outcome from state and
+           - quality below threshold        -> too strong -> ``hi = current``
+         - else refusal above the threshold -> too weak  -> ``lo = current``
+         - else (both acceptable) -> we can go stronger, so ``lo = current``
+           (keep chasing the accepted-quality ceiling for lower refusal).
+         The outcome is always recorded in ``tested``.
+      4. If we have fewer than ``reflexion_alpha_search_iters`` tested alphas
+         and a meaningful window remains, propose ``mid = (lo + hi) / 2``.
+      5. Else converge: pick the best candidate (lowest refusal among those
+         with quality >= judge_quality_threshold; otherwise the lowest-refusal
+         one) and return it with ``done = True``.
+
+    Returns ``(alpha_to_test, new_search_state)``.
+    """
+    search = dict(state.get("alpha_search") or {})
+    if not search:
+        search = {
+            "lo": float(cfg.alpha_search_lo),
+            "hi": float(cfg.alpha_search_hi),
+            "current": None,
+            "tested": [],
+            "done": False,
+        }
+    # 1) Converged search: stay put (do not restart the search).
+    if search.get("done") and search.get("tested"):
+        best = _best_seen(search["tested"], cfg)
+        return best, search
+
+    lo, hi = float(search["lo"]), float(search["hi"])
+    current = search.get("current")
+
+    # 2) Fresh search -> propose the first midpoint.
+    if current is None:
+        mid = (lo + hi) / 2.0
+        search.update(lo=lo, hi=hi, current=mid, tested=[], done=False)
+        return mid, search
+
+    # 3) Record the outcome of alpha == current from the just-finished cycle.
+    refusal = state.get("judge_refusal_rate", state.get("refusal_rate", 1.0))
+    quality = state.get("judge_quality_mean", 0.5)
+    tested = list(search.get("tested", []))
+    tested.append({"alpha": float(current), "refusal": float(refusal), "quality": float(quality)})
+    threshold = float(getattr(cfg, "judge_quality_threshold", 0.4))
+    refusal_thr = float(getattr(cfg, "judge_refusal_threshold", 0.3))
+    if quality < threshold:
+        hi = current                      # too strong -> go weaker
+    elif refusal > refusal_thr:
+        lo = current                      # too weak -> go stronger
+    else:
+        # both acceptable -> we can afford a stronger edit (lower refusal);
+        # nudge the lower bound up toward the current alpha and keep chasing
+        # the quality ceiling on the high side.
+        lo = current
+    lo = min(lo, float(cfg.alpha_search_hi))
+    hi = max(hi, float(cfg.alpha_search_lo))
+
+    # 4) Keep searching while budget remains and the window is meaningful.
+    cap = int(getattr(cfg, "reflexion_alpha_search_iters", 5))
+    if len(tested) < cap and (hi - lo) > 1e-6:
+        mid = (lo + hi) / 2.0
+        search.update(lo=lo, hi=hi, current=mid, tested=tested, done=False)
+        return mid, search
+
+    # 5) Converge on the best alpha seen.
+    search.update(lo=lo, hi=hi, current=None, tested=tested, done=True)
+    best = _best_seen(tested, cfg)
+    return best, search
+
+
+def _best_seen(tested: list, cfg: Any) -> float:
+    """Lowest-refusal alpha among those with acceptable quality; otherwise the
+    lowest-refusal alpha overall."""
+    threshold = float(getattr(cfg, "judge_quality_threshold", 0.4))
+    good = [t for t in tested if t["quality"] >= threshold]
+    pool = good if good else tested
+    return min(pool, key=lambda t: (t["refusal"], -t["quality"]))["alpha"]
+
+
 def reflexion_node(state: AbliterationState) -> dict:
     """Choose a retry strategy and the next node for a stalled run."""
     cfg = state["config"]
@@ -43,9 +140,20 @@ def reflexion_node(state: AbliterationState) -> dict:
 
     # ------------------------------------------------------------------ #
     # Attempt counter; bail out past the configured ceiling.
+    #
+    # EXCEPTION: once a binary alpha search is in progress, the strategy is
+    # pinned to 'increase_alpha' and the attempt cap is bypassed — the search
+    # has its own iteration cap (reflexion_alpha_search_iters) and must be
+    # allowed to step excise->verify->judge repeatedly until it converges.
     # ------------------------------------------------------------------ #
     attempt = state.get("reflexion_attempts", 0) + 1
-    if attempt > cfg.reflexion_max_attempts:
+    alpha_search = state.get("alpha_search")
+    searching_in_progress = bool(
+        alpha_search
+        and getattr(cfg, "reflexion_alpha_binary_search", False)
+        and not alpha_search.get("done")
+    )
+    if not searching_in_progress and attempt > cfg.reflexion_max_attempts:
         return {
             "reflexion_attempts": attempt,
             "reflexion_chosen_action": "rebirth",
@@ -105,8 +213,12 @@ def reflexion_node(state: AbliterationState) -> dict:
         "expand_target_layers",
         "skip_model",
     ]
-    idx = min(attempt - 1, len(fallback_strategies) - 1)
-    strategy = fallback_strategies[idx]
+    if searching_in_progress:
+        # Keep resuming the in-flight alpha search until it converges.
+        strategy = "increase_alpha"
+    else:
+        idx = min(attempt - 1, len(fallback_strategies) - 1)
+        strategy = fallback_strategies[idx]
 
     # ------------------------------------------------------------------ #
     # Optional LLM KB consultation — only on the first attempt.
@@ -204,17 +316,31 @@ def reflexion_node(state: AbliterationState) -> dict:
 
         ret["config"] = ModelConfig(**{**cfg.model_dump(), "dir_method": nxt})
     elif strategy == "adjust_alpha":
-        new_alpha = cfg.alpha * (0.5 if quality < cfg.judge_quality_threshold else 1.5)
-        ret["config"] = cfg.model_copy(update=dict(alpha=min(new_alpha, 1.0)))
+        # Same shared alpha policy as increase_alpha: nudge within the common
+        # [alpha_search_lo, alpha_search_hi] window (no more arbitrary cap at
+        # 1.0, which silently contradicted the high-alpha ladder/search).
+        lo_, hi_ = cfg.alpha_search_lo, cfg.alpha_search_hi
+        factor = 1.5 if quality >= cfg.judge_quality_threshold else 0.5
+        new_alpha = min(max(cfg.alpha * factor, lo_), hi_)
+        ret["config"] = cfg.model_copy(update=dict(alpha=new_alpha, sweep_alphas=[new_alpha]))
+        history_entry["alpha"] = new_alpha
     elif strategy == "expand_target_layers":
-        num_layers = state.get("num_layers", 0)
-        existing = state.get("target_layers", [])
-        if num_layers > 0:
-            # Double the target set: add every other layer not already selected.
-            all_layers = set(range(num_layers))
-            expanded = list(set(existing) | all_layers)
-            expanded.sort()
-            ret["target_layers"] = expanded
+        # One-shot guard: never expand layers twice in a run (re-expanding is
+        # a no-op anyway once all layers are selected, but this also stops the
+        # strategy from re-arming across ouroboros/reflexion loops).
+        history = state.get("reflexion_history", []) or []
+        already_expanded = any(
+            h.get("expanded_target_layers") for h in history
+        )
+        if not already_expanded:
+            num_layers = state.get("num_layers", 0)
+            existing = state.get("target_layers", [])
+            if num_layers > 0:
+                all_layers = set(range(num_layers))
+                expanded = list(set(existing) | all_layers)
+                expanded.sort()
+                ret["target_layers"] = expanded
+                history_entry["expanded_target_layers"] = True
     elif strategy == "switch_method":
         # Move the pipeline onto the next untried ablation method and restrict
         # the next sweep to exactly that method (so EXCISE actually tests it).
@@ -231,13 +357,22 @@ def reflexion_node(state: AbliterationState) -> dict:
             ))
             history_entry["tried_method"] = nxt_method
     elif strategy == "increase_alpha":
-        # Push alpha up a fixed ladder and force the next sweep to test that
-        # specific value (steering in particular needs high alphas).
-        next_alpha = next((a for a in _ALPHA_LADDER if a > cfg.alpha), _ALPHA_LADDER[-1])
-        ret["config"] = cfg.model_copy(update=dict(
-            alpha=next_alpha, sweep_alphas=[next_alpha],
-        ))
-        history_entry["alpha"] = next_alpha
+        if getattr(cfg, "reflexion_alpha_binary_search", False):
+            chosen_alpha, search_state = _step_alpha_search(cfg, state)
+            ret["config"] = cfg.model_copy(update=dict(
+                alpha=chosen_alpha, sweep_alphas=[chosen_alpha],
+            ))
+            # Persist the search state so the next (pinned) reflexion pass
+            # resumes from where we left off.
+            ret["alpha_search"] = search_state
+            history_entry["alpha"] = chosen_alpha
+        else:
+            # Fallback: fixed ladder (one step up).
+            next_alpha = next((a for a in _ALPHA_LADDER if a > cfg.alpha), _ALPHA_LADDER[-1])
+            ret["config"] = cfg.model_copy(update=dict(
+                alpha=next_alpha, sweep_alphas=[next_alpha],
+            ))
+            history_entry["alpha"] = next_alpha
     elif strategy == "change_weights":
         # Cycle which modules get projected: o_proj -> down_proj -> both.
         cur = set(cfg.target_weights or [])
@@ -246,6 +381,10 @@ def reflexion_node(state: AbliterationState) -> dict:
         ret["config"] = cfg.model_copy(update=dict(target_weights=list(nxt_weights)))
         history_entry["target_weights"] = list(nxt_weights)
     elif strategy == "skip_model":
+        # Terminal & idempotent: once we've declared the run incompatible we
+        # stay incompatible (route_after_reflexion -> rebirth). The history
+        # marker makes the decision auditable and prevents re-escalation.
         ret["reflexion_final_verdict"] = "incompatible"
+        history_entry["skip_model"] = True
 
     return ret

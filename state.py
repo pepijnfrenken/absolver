@@ -138,6 +138,10 @@ class AbliterationState(TypedDict, total=False):
     """Next node name after REFLEXION."""
     reflexion_final_verdict: str
     """'success' | 'failed' | 'incompatible'."""
+    alpha_search: dict
+    """Persisted alpha binary-search state for the 'increase_alpha' strategy:
+    {'lo': float, 'hi': float, 'current': float|None, 'tested': list[dict],
+     'done': bool}. Carried across reflexion invocations."""
 
     # ------------------------------------------------------------------ #
     # KNOWLEDGE BASE (loaded lazily inside REFLEXION)

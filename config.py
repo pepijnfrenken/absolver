@@ -281,6 +281,22 @@ class ModelConfig(BaseModel):
     """Trigger a reflection pass only when an attempt fails."""
 
     # ------------------------------------------------------------------ #
+    # Binary alpha search (REFLEXION 'increase_alpha')
+    # ------------------------------------------------------------------ #
+    reflexion_alpha_binary_search: bool = True
+    """When True, REFLEXION's 'increase_alpha' runs a binary search over alpha
+    within [alpha_search_lo, alpha_search_hi] instead of the fixed ladder.
+    The search state is persisted in state['alpha_search'] and converges on
+    the best alpha in up to ``reflexion_alpha_search_iters`` iterations."""
+    alpha_search_lo: float = 0.5
+    """Lower bound of the alpha binary-search window."""
+    alpha_search_hi: float = 20.0
+    """Upper bound of the alpha binary-search window."""
+    reflexion_alpha_search_iters: int = 5
+    """Max binary-search iterations (alphas actually tested) before picking the
+    best candidate seen."""
+
+    # ------------------------------------------------------------------ #
     # Hugging Face Hub
     # ------------------------------------------------------------------ #
     push_to_hub: str | None = None
