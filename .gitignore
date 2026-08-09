@@ -9,3 +9,14 @@ __pycache__/
 abliterated_*/
 checkpoints/
 outputs/
+
+# Secrets / credentials — NEVER commit
+.env
+.env.*
+*.pem
+*.key
+keys/
+secrets/
+
+# Run logs
+logs/

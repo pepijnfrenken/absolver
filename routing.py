@@ -15,6 +15,10 @@ def _alpha_search_active(state: AbliterationState, cfg) -> bool:
     Used by the judge router so a 'pass' verdict keeps the search looping
     (midpoint -> excise -> judge -> reflexion) until the window closes,
     instead of prematurely ending at the first passing alpha.
+
+    NOTE: the alpha binary search only works when ``judge_enabled=true`` —
+    it needs the LLM judge's refusal/quality verdicts to steer toward the
+    steering ceiling, so do NOT disable the judge for an alpha-search run.
     """
     if not getattr(cfg, "reflexion_alpha_binary_search", False):
         return False

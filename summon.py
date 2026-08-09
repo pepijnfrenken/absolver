@@ -9,7 +9,8 @@ downstream nodes (PROBE / DISTILL / EXCISE) consume.
 from __future__ import annotations
 
 import logging
-from typing import Any
+import time
+from typing import Any, Callable
 
 import torch
 
@@ -33,6 +34,55 @@ try:
     import diffusers  # noqa: F401
 except Exception:  # pragma: no cover - env without diffusers
     diffusers = None  # type: ignore[assignment]
+
+
+# ---------------------------------------------------------------------------
+# Model-load retry
+# ---------------------------------------------------------------------------
+# ``summon_node`` hits the network/hub the first time a model is downloaded.
+# A flaky connection can surface as OSError / ConnectionError / RuntimeError
+# ("[Errno 104] Connection reset by peer", "Failed to resolve model id", ...)
+# that are transient and worth a bounded retry. OOM (MemoryError) and
+# KeyboardInterrupt are NOT transient and are intentionally NOT caught, so
+# they still crash loudly.
+_TRANSIENT_LOAD_ERRORS = (OSError, ConnectionError, RuntimeError)
+_LOAD_ATTEMPTS = 3
+_LOAD_BACKOFF = (2.0, 4.0)
+
+
+def _load_with_retry(load_fn: Callable[[], Any]) -> Any:
+    """Run ``load_fn`` with ``_LOAD_ATTEMPTS`` tries and exponential backoff.
+
+    Catches only transient download/load errors (OSError, ConnectionError,
+    RuntimeError); re-raises the last error after all attempts. Other
+    exceptions (e.g. a bad config ValueError) propagate immediately so the
+    caller's backend fallback still records them. MemoryError / KeyboardInterrupt
+    are never caught.
+    """
+    attempt = 1
+    last: Exception | None = None
+    while True:
+        try:
+            return load_fn()
+        except _TRANSIENT_LOAD_ERRORS as exc:
+            last = exc
+            if attempt >= _LOAD_ATTEMPTS:
+                break
+            wait = (
+                _LOAD_BACKOFF[attempt - 1]
+                if (attempt - 1) < len(_LOAD_BACKOFF)
+                else _LOAD_BACKOFF[-1]
+            )
+            logger.warning(
+                "model load step (%s) hit transient %s on attempt %d/%d: "
+                "%s; retrying in %.1fs",
+                "from_pretrained", type(exc).__name__, attempt, _LOAD_ATTEMPTS,
+                exc, wait,
+            )
+            time.sleep(wait)
+            attempt += 1
+    assert last is not None, "unreachable: loop must break or return"
+    raise last
 
 
 # ---------------------------------------------------------------------------
@@ -195,8 +245,10 @@ def summon_node(state: AbliterationState) -> dict:
         try:
             from transformers import AutoModelForCausalLM
 
-            model = AutoModelForCausalLM.from_pretrained(
-                cfg.model_id, subfolder="text_encoder", **kwargs
+            model = _load_with_retry(
+                lambda: AutoModelForCausalLM.from_pretrained(
+                    cfg.model_id, subfolder="text_encoder", **kwargs
+                )
             )
             if AutoTokenizer is not None:
                 try:
@@ -220,7 +272,9 @@ def summon_node(state: AbliterationState) -> dict:
         try:
             from transformers import AutoModelForCausalLM
 
-            model = AutoModelForCausalLM.from_pretrained(cfg.model_id, **kwargs)
+            model = _load_with_retry(
+                lambda: AutoModelForCausalLM.from_pretrained(cfg.model_id, **kwargs)
+            )
             if AutoTokenizer is not None:
                 tokenizer = AutoTokenizer.from_pretrained(cfg.model_id, **tok_kwargs)
                 if tokenizer.pad_token is None and tokenizer.eos_token is not None:
@@ -234,7 +288,9 @@ def summon_node(state: AbliterationState) -> dict:
         try:
             from transformers import AutoModelForSeq2SeqLM
 
-            model = AutoModelForSeq2SeqLM.from_pretrained(cfg.model_id, **kwargs)
+            model = _load_with_retry(
+                lambda: AutoModelForSeq2SeqLM.from_pretrained(cfg.model_id, **kwargs)
+            )
             if AutoTokenizer is not None:
                 tokenizer = AutoTokenizer.from_pretrained(cfg.model_id, **tok_kwargs)
                 if tokenizer.pad_token is None and tokenizer.eos_token is not None:

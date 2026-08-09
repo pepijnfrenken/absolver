@@ -16,6 +16,16 @@ from state import AbliterationState
 
 _log = logging.getLogger(__name__)
 
+# Methods EXCISE can actually realize. Only "mpoa" gets the magnitude-preserving
+# orthogonal ablation; everything else is a plain refusal-direction projection.
+# Sweeps/reflexion may propose method names (steering, bias_vectors,
+# direct_ablation, projected, lora, ...) that EXCISE has no distinct
+# implementation for — those silently run a plain projection, so the reflexion
+# loop THINKS it switched methods when it didn't (P1-1). This singleton is the
+# single source of truth both EXCISE (validates) and REFLEXION (restricts the
+# switch_method candidate pool) use.
+EXCISE_REALIZED_METHODS: frozenset[str] = frozenset({"mpoa", "projection"})
+
 
 def _decoder_of(model: Any, arch: str) -> Any:
     """Return the module whose ``.layers`` holds the transformer blocks.
@@ -170,6 +180,20 @@ def excise_node(state: AbliterationState) -> dict[str, Any]:
     alpha = state.get("alpha", state["config"].alpha)
     passes_completed = state.get("passes_completed", 0) + 1
 
+    # P1-1: a sweep/reflexion may select a method EXCISE has no distinct
+    # implementation for (steering, lunated_vectors, direct_ablation, ...).
+    # Executing it silently as plain projection would make reflexion believe
+    # it switched methods when it didn't. Log loudly and normalize the method
+    # to the plain-projection behavior so the recorded state matches reality.
+    if method not in EXCISE_REALIZED_METHODS:
+        _log.warning(
+            "EXCISE cannot realize method=%s; falling back to projection — "
+            "reflexion's method switch is a no-op for this method. "
+            "Implemented methods are: %s.",
+            method, sorted(EXCISE_REALIZED_METHODS),
+        )
+        method = "projection"
+
     _log.info(
         "EXCISE pass %d: method=%s alpha=%.2f layers=%s weights=%s",
         passes_completed, method, alpha, target_layers, target_weights,
@@ -313,4 +337,5 @@ def excise_node(state: AbliterationState) -> dict[str, Any]:
         "passes_completed": passes_completed,
         "excise_history": history,
         "pristine_state_dict": pristine,
+        "method": method,  # effective method actually realized (P1-1)
     }

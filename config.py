@@ -1,11 +1,36 @@
 """Configuration for Absolver: model, pipeline, eval, judge, reflexion, HF hub."""
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError
+
+_ENV_TEMPLATE_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+
+def _expand_model_id(value: str) -> str:
+    """Resolve ``${VAR:-default}`` env templates and a leading ``~`` in model_id.
+
+    P2-2: local-path configs no longer hardcode an absolute path like
+    ``/home/pino/models/X``; they use ``${MODEL_DIR:-...}/X`` so a fresh
+    checkout works by pointing ``MODEL_DIR`` at wherever the weights live.
+    HF hub ids (no ``${`` / ``~``) pass through unchanged.
+    """
+    if isinstance(value, str) and "${" in value:
+        def _sub(match: "re.Match[str]") -> str:
+            name = match.group(1)
+            default = match.group(2)
+            if name in os.environ and os.environ[name]:
+                return os.environ[name]
+            return default if default is not None else ""
+        value = _ENV_TEMPLATE_RE.sub(_sub, value)
+    if isinstance(value, str) and value.startswith("~"):
+        value = os.path.expanduser(value)
+    return value
 
 # Default reflexion strategy ladder. Order matters: earlier = cheaper.
 DEFAULT_STRATEGY_SPACE: list[str] = [
@@ -377,7 +402,11 @@ def load_config(path: str | Path) -> ModelConfig:
 
     flat = _flatten_nested(data)
     try:
-        return ModelConfig(**flat)
+        cfg = ModelConfig(**flat)
+        # P2-2: expand ${ENV:-default} / ~ in model_id so configs can point at a
+        # locally-downloaded model via MODEL_DIR without a hardcoded path.
+        cfg.model_id = _expand_model_id(cfg.model_id)
+        return cfg
     except ValidationError as exc:
         raise ValueError(
             f"Config validation failed for {p}.\n"

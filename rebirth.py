@@ -269,6 +269,9 @@ def rebirth_node(state: AbliterationState) -> dict[str, Any]:
         "target_weights": state.get("target_weights", []),
         "refusal_rate": state.get("judge_refusal_rate", state.get("refusal_rate")),
         "quality_mean": state.get("judge_quality_mean"),
+        # P2-3: distinguish a real LLM-judge pass from a keyword-fallback one.
+        "judge_status": state.get("judge_status", "ok"),
+        "judge_errors": int(state.get("judge_errors", 0) or 0),
         "mmlu_score": state.get("mmlu_score"),
         "reflexion_attempts": state.get("reflexion_attempts", 0),
         "reflexion_history": state.get("reflexion_history", []),

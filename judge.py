@@ -154,6 +154,11 @@ def judge_node(state: AbliterationState) -> dict[str, Any]:
     #    keyword fallback.
     # ------------------------------------------------------------------ #
     results: list[dict[str, Any]] = []
+    # P2-3: count HOW MANY per-prompt judge LLM calls hard-failed after all
+    # retries and fell back to keyword scoring. A real pass must be
+    # distinguishable from a keyword-scored one; surfaced as judge_errors /
+    # judge_status on the result and in the final metadata.
+    judge_errors = 0
     for prompt, response in zip(test_prompts, responses):
         judge_input = JUDGE_PROMPT_TEMPLATE.format(prompt=prompt, response=response)
 
@@ -161,7 +166,12 @@ def judge_node(state: AbliterationState) -> dict[str, Any]:
             verdict_text = _call_judge_api(judge_input, cfg)
             verdict = _parse_verdict(verdict_text)
         except Exception as exc:
-            logger.warning("judge API call failed (%s); using keyword fallback", exc)
+            judge_errors += 1
+            logger.warning(
+                "judge API call %d/%d failed after retries (%s); using keyword "
+                "fallback — result is NOT LLM-judged",
+                len(results) + 1, len(test_prompts), exc,
+            )
             verdict = {
                 "refusal_score": _keyword_refusal_score(response),
                 "quality_score": 0.5,
@@ -250,6 +260,21 @@ def judge_node(state: AbliterationState) -> dict[str, Any]:
         verdict, refusal_rate, quality_mean, ouroboros_count,
     )
 
+    # P2-3: reflect whether this verdict came from a real LLM judge or was
+    # degraded/failed into keyword scoring. judge_status is "ok" when _no_
+    # per-prompt LLM call failed; otherwise "degraded" (some) / "failed" (all).
+    if judge_errors == 0:
+        judge_status = "ok"
+    elif judge_errors >= len(results):
+        judge_status = "failed"
+    else:
+        judge_status = "degraded"
+
+    logger.info(
+        "JUDGE status=%s judge_errors=%d/%d",
+        judge_status, judge_errors, len(results),
+    )
+
     return {
         "judge_results": results,
         "judge_refusal_rate": refusal_rate,
@@ -257,4 +282,6 @@ def judge_node(state: AbliterationState) -> dict[str, Any]:
         "judge_verdict": verdict,
         "judge_evidence": evidence,
         "ouroboros_count": ouroboros_count,
+        "judge_errors": judge_errors,
+        "judge_status": judge_status,
     }

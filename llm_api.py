@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -68,14 +69,48 @@ def chat_completion(
         headers=headers,
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:300]
-        raise RuntimeError(f"judge API HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"judge API unreachable: {exc.reason}") from exc
+
+    # Retry transient failures (429 rate-limit, 5xx, transport errors) with
+    # exponential backoff. The free endpoint's in-flight ceiling is low, so
+    # a 429 is expected under load; without this, every 429 degrades the
+    # judge to keyword scoring. A config timeout/SSL/auth error still raises.
+    max_attempts = 3
+    backoff = (1.0, 2.0, 4.0)
+    payload: Any = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:300]
+            retryable = exc.code == 429 or exc.code in (500, 502, 503, 504)
+            if retryable and attempt < max_attempts:
+                wait = backoff[attempt - 1]
+                try:
+                    retry_after = exc.headers.get("Retry-After")
+                    if retry_after:
+                        wait = max(wait, float(retry_after))
+                except (TypeError, ValueError):
+                    pass
+                logger.warning(
+                    "judge API HTTP %s (attempt %d/%d); backing off %.1fs",
+                    exc.code, attempt, max_attempts, wait,
+                )
+                time.sleep(wait)
+                continue
+            raise RuntimeError(f"judge API HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            if attempt < max_attempts:
+                wait = backoff[attempt - 1]
+                logger.warning(
+                    "judge API unreachable (attempt %d/%d): %s; retrying in %.1fs",
+                    attempt, max_attempts, exc.reason, wait,
+                )
+                time.sleep(wait)
+                continue
+            raise RuntimeError(f"judge API unreachable: {exc.reason}") from exc
+    assert payload is not None, "judge API failed after retries"
 
     try:
         return payload["choices"][0]["message"]["content"]

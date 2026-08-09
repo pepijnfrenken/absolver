@@ -7,14 +7,44 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
-# Allow running from inside ~/.absolver/ without installing the package.
+# Allow running from inside ~/absolver/ without installing the package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import load_config  # noqa: E402
-from graph import build_abliteration_graph  # noqa: E402
+from config import load_config  # noqa: E402
+from graph import build_abliteration_graph, invoke_with_cap, warn_missing_keys  # noqa: E402
+
+_log = logging.getLogger(__name__)
+
+
+def _setup_logging(config_stem: str) -> str:
+    """Configure stdlib logging to a timestamped file under logs/ (INFO+).
+
+    The node modules use ``logging.getLogger(__name__).info/warning``; with
+    no root handler configured these lines are silently dropped, so an
+    unattended run leaves almost no debug trace. Wire root logging to both
+    stderr and a per-run file here. Safe to call any time (force resets)."""
+    import logging
+    from datetime import datetime
+
+    log_dir = Path(__file__).resolve().parent / "logs"
+    log_dir.mkdir(exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = log_dir / f"{config_stem}_{stamp}.log"
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(log_path, encoding="utf-8"),
+        ],
+        force=True,
+    )
+    return str(log_path)
 
 
 def main() -> None:
@@ -37,7 +67,16 @@ def main() -> None:
         help="Where to execute the pipeline (default: local).",
     )
     parser.add_argument(
-        "--resume", help="Resume from a checkpoint thread id", default=None
+        "--resume",
+        default=None,
+        nargs="?",
+        const="",
+        help=(
+            "Resume from the last checkpoint for the given config's thread. "
+            "Works because the SqliteSaver persists checkpoints across "
+            "processes (P0-1). Optional value: a custom thread id; when "
+            "omitted, defaults to the config-file stem (the stable thread_id)."
+        ),
     )
     args = parser.parse_args()
 
@@ -53,15 +92,21 @@ def main() -> None:
         return
 
     # --- local (default) -------------------------------------------------
+    log_file = _setup_logging(Path(args.config).stem)
+    print(f"Run log: {log_file}")
     config = load_config(args.config)
+    # P1-3: surface a missing judge/LLM key loudly before running.
+    warn_missing_keys(config)
+
     graph = build_abliteration_graph()
 
     initial_state = {"config": config}
+    # --resume keeps the SAME thread_id so the SqliteSaver resumes the last
+    # checkpoint for this config (P2-1); we never wipe the .sqlite file.
     thread_id = args.resume or Path(args.config).stem
 
-    result = graph.invoke(
-        initial_state, config={"configurable": {"thread_id": thread_id}}
-    )
+    # P1-2: cap TOTAL graph.invoke calls at pipeline_max_invocations.
+    result = invoke_with_cap(graph, initial_state, thread_id, config=config)
 
     print(f"\n{'=' * 50}")
     print(f"Absolver Complete: {result.get('reflexion_final_verdict', 'success')}")

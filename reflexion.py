@@ -10,17 +10,18 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from excise import EXCISE_REALIZED_METHODS
 from llm_api import chat_completion
 from prompts import REFLEXION_KB_PROMPT_TEMPLATE
 from state import AbliterationState
 
-# Rotation orders for the "structural retry" strategies. These make the
-# otherwise-no-op fallback actions real: e.g. switch_method actually moves the
-# pipeline onto a different ablation method before re-running EXCISE.
-_METHOD_ROTATION: list[str] = [
-    "steering", "mpoa", "lora", "bias_vectors",
-    "direct_ablation", "projected", "advanced",
-]
+# Rotation order for the "structural retry" strategies. switch_method moves
+# the pipeline onto a different ablation method before re-running EXCISE.
+# P1-1: the pool is restricted to the methods EXCISE can actually execute
+# (excise.EXCISE_REALIZED_METHODS) so reflexion never proposes a method that
+# would silently no-op as a plain projection. Order: plain projection first,
+# then MPOA (the LFM2.5 winning magnitude-preserving recipe).
+_METHOD_ROTATION: list[str] = list(EXCISE_REALIZED_METHODS)
 _ALPHA_LADDER: list[float] = [2.0, 4.0, 8.0, 10.0, 20.0]
 _WEIGHT_TOGGLES: list[list[str]] = [
     ["o_proj"],

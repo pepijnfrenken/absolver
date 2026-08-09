@@ -1,4 +1,4 @@
-model_id: "/home/pino/models/BarunLM-35M"
+model_id: "${MODEL_DIR:-models}/BarunLM-35M"
 model_arch: "dense"
 dtype: "float32"
 device: "cpu"
