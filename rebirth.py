@@ -4,6 +4,10 @@ from model_registry import get_model
 
 import json
 import logging
+import os
+import shutil
+import tempfile
+import time as _time
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +16,51 @@ import torch
 from state import AbliterationState
 
 _log = logging.getLogger(__name__)
+
+# Verdicts that mean the run must NOT be published (P0-3).
+_FAILED_VERDICTS = ("failed", "incompatible")
+
+
+def _write_weights(output_dir: Path, model: Any, architecture: str) -> None:
+    """Persist the abliterated model into ``output_dir``.
+
+    Diffusion targets only modify the text encoder, so we serialize its
+    state_dict directly. For everything else we prefer save_pretrained, but
+    fall back to a raw state_dict dump if that fails (CPU/seq2seq/custom
+    architectures sometimes reject save_pretrained).
+    """
+    if architecture == "diffusion_encoder":
+        torch.save(model.state_dict(), output_dir / "text_encoder.pt")
+    else:
+        try:
+            model.save_pretrained(str(output_dir))
+        except Exception as exc:
+            print(f"save_pretrained failed ({exc}); falling back to state_dict")
+            torch.save(model.state_dict(), output_dir / "pytorch_model.pt")
+
+
+def _write_failed_marker(output_dir: Path, state: AbliterationState) -> None:
+    """Record a failed run beside the (possibly stale) output dir.
+
+    A failed run must not create or overwrite the model output directory —
+    otherwise a consumer could mistake the artifact for a successful export,
+    and a stale dir from a PRIOR successful run would be clobbered. We instead
+    write a ``<output_dir>.FAILED`` marker in the same parent so it is
+    unambiguous that the most recent attempt failed.
+    """
+    marker = output_dir.parent / f"{output_dir.name}.FAILED"
+    try:
+        payload = {
+            "model_id": output_dir.name,
+            "final_verdict": state.get("reflexion_final_verdict") or "failed",
+            "judge_verdict": state.get("judge_verdict"),
+            "judge_status": state.get("judge_status"),
+            "pipeline_passed": False,
+        }
+        marker.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        _log.warning("REBIRTH: wrote FAILED marker %s", marker)
+    except Exception as exc:  # pragma: no cover - best-effort
+        _log.warning("REBIRTH: could not write FAILED marker %s: %s", marker, exc)
 
 
 def _write_model_card(output_dir: Path, state: AbliterationState, cfg: Any) -> None:
@@ -212,53 +261,71 @@ def rebirth_node(state: AbliterationState) -> dict[str, Any]:
 
     Returns a partial state dict with ``output_path``, ``hub_push_success``,
     and ``metadata``.
+
+    Publication contract (P0-3):
+      * The output directory is ONLY created when every gate passes. A failed
+        run writes a ``<dir>.FAILED`` marker beside the (untouched) output dir
+        instead — never a look-like-success artifact, and never clobbering a
+        stale dir from a prior successful run.
+      * Missing verdicts are NEVER defaulted to success.
+      * ``reflexion_final_verdict`` of ``"failed"``/``"incompatible"`` and a
+        degraded/failed ``judge_status`` are treated as failures too.
+      * On success the directory is written to a temp dir and atomically
+        renamed over the old one, so a crash mid-save can't leave a partially
+        written "successful" artifact.
     """
     cfg = state["config"]
-    model = get_model()
     architecture = state.get("architecture", "")
 
     # ------------------------------------------------------------------ #
-    # 0. Gate: only export when the pipeline actually succeeded.
-    #    Failed runs (high refusal / poor quality / rejected by judge) are
-    #    recorded in the experience DB but NOT persisted to disk.
+    # 0. Gate. A run is publishable ONLY when every gate passes; missing
+    #    verdicts fail closed (never default to success) (P0-3).
     # ------------------------------------------------------------------ #
     quality_pass = state.get("quality_pass", False)
     judge_verdict = state.get("judge_verdict", None)
-    failed = (judge_verdict is not None and judge_verdict != "pass") or not quality_pass
+    reflexion_final_verdict = state.get("reflexion_final_verdict", None)
+    judge_status = state.get("judge_status", "ok")
 
-    if failed:
-        _log.warning(
-            "REBIRTH: pipeline failed (quality_pass=%s, judge_verdict=%s); "
-            "skipping model export. Experience DB will still be updated.",
-            quality_pass,
-            judge_verdict,
-        )
+    judge_failed = judge_verdict is not None and judge_verdict != "pass"
+    reflexion_failed = bool(reflexion_final_verdict) and reflexion_final_verdict in _FAILED_VERDICTS
+    # A degraded/failed judge (keyword-fallback) result is NOT publishable.
+    judge_degraded = judge_status in ("degraded", "failed")
+    failed = judge_failed or reflexion_failed or judge_degraded or not quality_pass
 
-    # 1. Resolve output directory and make sure it exists.
-    #    When pushing to the Hub we still need a local copy to upload from.
     output_dir = Path(
         cfg.push_to_hub or f"abliterated_{cfg.model_id.split('/')[-1]}"
     )
-    output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 2. Save model weights — only if the pipeline passed.
-    #    Diffusion targets only modify the text encoder, so we serialize its
-    #    state_dict directly. For everything else we prefer save_pretrained,
-    #    but fall back to a raw state_dict dump if that fails (CPU/seq2seq/
-    #    custom architectures sometimes reject save_pretrained).
-    if not failed:
-        if architecture == "diffusion_encoder":
-            torch.save(model.state_dict(), output_dir / "text_encoder.pt")
-        else:
-            try:
-                model.save_pretrained(str(output_dir))
-            except Exception as exc:
-                print(f"save_pretrained failed ({exc}); falling back to state_dict")
-                torch.save(model.state_dict(), output_dir / "pytorch_model.pt")
+    # ------------------------------------------------------------------ #
+    # FAILED — don't create/publish; write a FAILED marker only.
+    # ------------------------------------------------------------------ #
+    if failed:
+        _log.warning(
+            "REBIRTH: pipeline failed (quality_pass=%s, judge_verdict=%s, "
+            "reflexion_final_verdict=%s, judge_status=%s); NOT creating output "
+            "dir %s, NOT writing metadata, NOT pushing experience record.",
+            quality_pass, judge_verdict, reflexion_final_verdict, judge_status,
+            output_dir,
+        )
+        _write_failed_marker(output_dir, state)
+        return {
+            "output_path": None,
+            "hub_push_success": False,
+            "metadata": {
+                "model_id": cfg.model_id,
+                "final_verdict": reflexion_final_verdict or "failed",
+                "judge_verdict": judge_verdict or "fail_refusal",
+                "judge_status": judge_status,
+                "pipeline_passed": False,
+            },
+        }
 
-    # 3. Write the metadata sidecar — always, even on failure, so the
-    #    experience DB still gets a record of what happened.
+    # ------------------------------------------------------------------ #
+    # 1. Success: write weights + metadata + model card to a TEMP dir, then
+    #    atomically rename it over the output dir (P0-3 stale-file safety).
+    # ------------------------------------------------------------------ #
     separation_scores = state.get("separation_scores") or {}
+    effective_verdict = reflexion_final_verdict or judge_verdict or "pass"
     metadata: dict[str, Any] = {
         "model_id": cfg.model_id,
         "method": cfg.method,
@@ -270,26 +337,55 @@ def rebirth_node(state: AbliterationState) -> dict[str, Any]:
         "refusal_rate": state.get("judge_refusal_rate", state.get("refusal_rate")),
         "quality_mean": state.get("judge_quality_mean"),
         # P2-3: distinguish a real LLM-judge pass from a keyword-fallback one.
-        "judge_status": state.get("judge_status", "ok"),
+        "judge_status": judge_status,
         "judge_errors": int(state.get("judge_errors", 0) or 0),
         "mmlu_score": state.get("mmlu_score"),
         "reflexion_attempts": state.get("reflexion_attempts", 0),
         "reflexion_history": state.get("reflexion_history", []),
-        "final_verdict": state.get("reflexion_final_verdict", "success"),
+        "final_verdict": effective_verdict,
         "separation_scores": {str(k): v for k, v in separation_scores.items()},
-        "pipeline_passed": not failed,
+        "pipeline_passed": True,
     }
-    with (output_dir / "abliteration_metadata.json").open("w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2)
 
-    # 3b. Write README.md model card — before Hub push, only when we have
-    #     a pipeline pass (no point writing a card for a failed model).
-    if not failed:
-        _write_model_card(output_dir, state, cfg)
+    tmp_dir: Path | None = None
+    try:
+        output_dir.parent.mkdir(parents=True, exist_ok=True)
+        tmp_dir = Path(
+            tempfile.mkdtemp(prefix=f".{output_dir.name}.tmp-", dir=str(output_dir.parent))
+        )
+        _write_weights(tmp_dir, get_model(), architecture)
+        with (tmp_dir / "abliteration_metadata.json").open("w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2)
+        _write_model_card(tmp_dir, state, cfg)
 
-    # 4. Push to the HF Hub (best-effort) — only if the pipeline passed.
+        # Atomically replace the output dir: move the old aside, move the new
+        # in, and drop the old. If the swap fails, roll back the old dir.
+        backup = output_dir.parent / f".{output_dir.name}.bak-{int(_time.time())}"
+        if output_dir.exists() or output_dir.is_symlink():
+            if backup.exists():
+                shutil.rmtree(backup, ignore_errors=True)
+            os.replace(output_dir, backup)
+        try:
+            os.replace(tmp_dir, output_dir)
+            tmp_dir = None  # consumed by the rename
+        except Exception:
+            if backup.exists() and not output_dir.exists():
+                os.replace(backup, output_dir)
+            raise
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+    except Exception as exc:
+        _log.error("REBIRTH: failed to publish model to %s: %s", output_dir, exc)
+        if tmp_dir is not None and tmp_dir.exists():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
+
+    # ------------------------------------------------------------------ #
+    # 2. Push to the HF Hub (best-effort) — only after the atomic local
+    #    replace succeeded.
+    # ------------------------------------------------------------------ #
     hub_success = False
-    if not failed and cfg.push_to_hub:
+    if cfg.push_to_hub:
         try:
             from huggingface_hub import HfApi
 
@@ -318,7 +414,9 @@ def rebirth_node(state: AbliterationState) -> dict[str, Any]:
             print(f"Hub push failed: {exc}")
             hub_success = False
 
-    # 5. Record in the experience DB (if SUMMON attached one).
+    # ------------------------------------------------------------------ #
+    # 3. Record in the experience DB (only for a published run).
+    # ------------------------------------------------------------------ #
     db = state.get("experience_db")
     if db is not None:
         try:
@@ -339,7 +437,7 @@ def rebirth_node(state: AbliterationState) -> dict[str, Any]:
                     "judge_refusal_rate", state.get("refusal_rate")
                 ),
                 quality_mean=state.get("judge_quality_mean"),
-                final_verdict=state.get("reflexion_final_verdict", "success"),
+                final_verdict=effective_verdict,
                 reflexion_attempts=state.get("reflexion_attempts", 0),
                 reflexion_history=state.get("reflexion_history", []),
             )

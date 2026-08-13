@@ -55,6 +55,23 @@ def _build_candidates(cfg: Any, layer_types: list[str] | None = None) -> list[di
     dropped.
     """
     methods = getattr(cfg, "sweep_methods", None) or [cfg.method]
+    # P1-2: the sweep must only search methods EXCISE can actually realize.
+    # Otherwise the "winner" (selected by method X) would be applied with a
+    # different algorithm at the final EXCISE step — behavior is lost. Drop
+    # unrealizable methods loudly instead of silently substituting a winner.
+    from excise import EXCISE_REALIZED_METHODS
+
+    requested_methods = set(methods)
+    unrealizable = requested_methods - set(EXCISE_REALIZED_METHODS)
+    if unrealizable:
+        logger.warning(
+            "SWEEP: dropping unrealizable method(s) %s — EXCISE can only "
+            "realize %s. A sweep winner must be reproducible by EXCISE (P1-2).",
+            sorted(unrealizable), sorted(EXCISE_REALIZED_METHODS),
+        )
+    methods = [m for m in methods if m in EXCISE_REALIZED_METHODS] or list(
+        EXCISE_REALIZED_METHODS
+    )
     dir_methods = getattr(cfg, "sweep_dir_methods", None) or [cfg.dir_method]
     layer_sets = list(getattr(cfg, "sweep_layer_sets", None) or [[]])
     explicit_alphas = getattr(cfg, "sweep_alphas", None)

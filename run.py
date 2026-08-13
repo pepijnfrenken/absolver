@@ -15,8 +15,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import load_config  # noqa: E402
-from config import load_config  # noqa: E402
-from graph import build_abliteration_graph, invoke_with_cap, warn_missing_keys  # noqa: E402
+from graph import (  # noqa: E402
+    build_abliteration_graph,
+    ensure_model_loaded,
+    invoke_with_cap,
+    warn_missing_keys,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -105,11 +109,19 @@ def main() -> None:
     # checkpoint for this config (P2-1); we never wipe the .sqlite file.
     thread_id = args.resume or Path(args.config).stem
 
+    # On --resume the HF model is NOT checkpointed (it lives in the
+    # process-local registry), and LangGraph replays past `summon` without
+    # re-running it. Repopulate the registry so the resumed run finds its
+    # model instead of crashing in EXCISE/VERIFY/JUDGE (P0-1).
+    if args.resume:
+        summon_slice = ensure_model_loaded(config)
+        _log.info("--resume: reloaded model into registry (%s)", summon_slice.get("architecture"))
+
     # P1-2: cap TOTAL graph.invoke calls at pipeline_max_invocations.
     result = invoke_with_cap(graph, initial_state, thread_id, config=config)
 
     print(f"\n{'=' * 50}")
-    print(f"Absolver Complete: {result.get('reflexion_final_verdict', 'success')}")
+    print(f"Absolver Complete: {result.get('reflexion_final_verdict') or result.get('judge_verdict') or 'incomplete'}")
     print(f"Output: {result.get('output_path', 'N/A')}")
     refusal = result.get("judge_refusal_rate")
     if refusal is not None:

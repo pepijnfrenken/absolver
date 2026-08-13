@@ -1,4 +1,4 @@
-"""LangGraph assembly — tensor-safe via msgpack default handler monkey-patch.
+"""LangGraph assembly — tensor-safe via msgpack ext-code serialization.
 
 Checkpointing: the compiled graph uses a file-backed :class:`SqliteSaver`
 (crash-safe / resumable across processes) instead of the in-memory
@@ -6,16 +6,29 @@ Checkpointing: the compiled graph uses a file-backed :class:`SqliteSaver`
 the same ``thread_id`` (see P0-1). If the optional ``langgraph-checkpoint-``
 sqlite backend is unavailable, we fall back to ``MemorySaver`` with a loud
 warning (the run is then NOT crash-recoverable).
+
+Resume honesty: checkpointed state may contain tensors (``harm_acts``,
+``harmless_acts``, ``paired_*_acts``, ``refusal_directions``,
+``pristine_state_dict``). These round-trip as real ``torch.Tensor`` objects
+via a dedicated msgpack ext code, so a resumed run sees tensors (not the
+python lists an earlier serializer produced). The HF model itself is NOT
+checkpointed — it lives in the process-local registry and the resumed
+process must reload it (see ``ensure_model_loaded`` / ``--resume`` in
+``run.py``).
 """
 from __future__ import annotations
 
+import io as _io
 import logging
 import os
 import sqlite3
 import time
 from pathlib import Path
 
+import ormsgpack
+import torch
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.serde import jsonplus as _json
 from langgraph.graph import END, START, StateGraph
 
 from distill import distill_node
@@ -32,17 +45,49 @@ from verify import verify_node
 
 
 # ── Monkey-patch msgpack to handle tensors ──────────────────────────────
-import torch
-from langgraph.checkpoint.serde import jsonplus as _jp
+# ``langgraph``'s serializer CANNOT encode a torch.Tensor natively. The previous
+# naive handler serialized tensors as ``detach().cpu().tolist()``, which
+# corrupted checkpoints: ``harm_acts`` / ``harmless_acts`` /
+# ``pristine_state_dict`` came back from a resume as python LISTS, and the
+# tensor consumers in DISTILL/EXCISE crashed (P0-1).
+#
+# We instead round-trip tensors through ``torch.save`` bytes in a dedicated
+# msgpack ext type. BOTH sides must be patched:
+#   * serialize:  ``_msgpack_default`` — emit ``ormsgpack.Ext`` with the bytes;
+#   * deserialize: the per-instance ext hook built by
+#     ``_create_msgpack_ext_hook`` (the SqliteSaver's serializer is constructed
+#     after this module is imported, so it picks up the patched factory).
+# The ext code 8 is unused by langgraph's own codes (0-7).
+_EXT_TENSOR = 8
 
-_orig_default = _jp._msgpack_default
+_orig_default = _json._msgpack_default
+
 
 def _tensor_default(obj):
     if isinstance(obj, torch.Tensor):
-        return obj.detach().cpu().tolist()
+        buf = _io.BytesIO()
+        torch.save(obj.detach().cpu(), buf)
+        return ormsgpack.Ext(_EXT_TENSOR, buf.getvalue())
     return _orig_default(obj)
 
-_jp._msgpack_default = _tensor_default
+
+_json._msgpack_default = _tensor_default
+
+_orig_create_ext_hook = _json._create_msgpack_ext_hook
+
+
+def _tensor_create_ext_hook(allowed_modules=None):
+    hook = _orig_create_ext_hook(allowed_modules)
+
+    def _tensor_ext_hook(code, data):
+        if code == _EXT_TENSOR:
+            return torch.load(_io.BytesIO(data), weights_only=True)
+        return hook(code, data)
+
+    return _tensor_ext_hook
+
+
+_json._create_msgpack_ext_hook = _tensor_create_ext_hook
 
 _log = logging.getLogger(__name__)
 
@@ -84,7 +129,7 @@ def _make_checkpointer(checkpoint_path: str | None):
             "langgraph.checkpoint.sqlite is not available; falling back to "
             "MemorySaver — the run is NOT crash-recoverable/resumable."
         )
-        return MemorySaver()
+        return _with_tensor_serde(MemorySaver())
     try:
         path = _resolve_checkpoint_path(checkpoint_path)
         conn = sqlite3.connect(path, check_same_thread=False)
@@ -95,14 +140,39 @@ def _make_checkpointer(checkpoint_path: str | None):
             "resumed with --resume / the matching thread_id.",
             path,
         )
-        return saver
+        return _with_tensor_serde(saver)
     except Exception as exc:  # pragma: no cover - defensive fallback
         _log.warning(
             "SqliteSaver unavailable (%s); falling back to MemorySaver — "
             "this run is NOT crash-recoverable/resumable.",
             exc,
         )
-        return MemorySaver()
+        return _with_tensor_serde(MemorySaver())
+
+
+def _with_tensor_serde(saver):
+    """Ensure the given saver's serializer decodes torch tensors.
+
+    ``langgraph.checkpoint.base`` instantiates a shared ``JsonPlusSerializer``
+    class attribute at import time — BEFORE ``graph`` patches the
+    ``_create_msgpack_ext_hook`` factory — so the saver-side deserializer may
+    still be the stock one. We always bump the per-instance ``_unpack_ext_hook``
+    here (idempotently) so the tensor ext code round-trips regardless of import
+    order. Serialization is already handled by patching ``_msgpack_default``.
+    """
+    serde = getattr(saver, "serde", None)
+    hook = getattr(serde, "_unpack_ext_hook", None)
+    if serde is None or hook is None or getattr(hook, "_pino_tensor_wrapped", False):
+        return saver
+
+    def _tensor_ext_hook(code, data):
+        if code == _EXT_TENSOR:
+            return torch.load(_io.BytesIO(data), weights_only=True)
+        return hook(code, data)
+
+    _tensor_ext_hook._pino_tensor_wrapped = True
+    serde._unpack_ext_hook = _tensor_ext_hook
+    return saver
 
 
 def build_abliteration_graph(checkpoint_path: str | None = None):
@@ -150,6 +220,23 @@ def build_abliteration_graph(checkpoint_path: str | None = None):
 TERMINAL_VERDICTS = ("success", "incompatible", "failed", "pass")
 
 
+def ensure_model_loaded(config) -> dict:
+    """Reload the model into the process-local registry before resuming.
+
+    The HF model lives in ``model_registry`` (process-local) and is never
+    checkpointed. ``--resume`` re-invokes the graph with the same thread_id,
+    and LangGraph replays from the last checkpoint WITHOUT re-running the
+    ``summon`` node — so a fresh process restoring a checkpoint has no model
+    in its registry and would crash in EXCISE/VERIFY/JUDGE. Running the
+    SUMMON logic up front repopulates the registry so the resumed run finds
+    its model.
+
+    Returns the SUMMON state slice (architecture, layers, ...) which carries
+    the fields downstream nodes need on the resumed thread.
+    """
+    return summon_node({"config": config})
+
+
 def invoke_with_cap(
     graph,
     initial_state,
@@ -168,6 +255,11 @@ def invoke_with_cap(
     invocation so the SqliteSaver persists the run and a crash/resume keeps the
     thread continuity.
 
+    A missing verdict is treated as NON-terminal (never silently assumed to be
+    success); if the cap is hit without a terminal verdict, the last result is
+    stamped ``reflexion_final_verdict="failed"`` so REBIRTH gates on failure
+    instead of publishing a look-like-success artifact (P1-3).
+
     Returns the last result dict.
     """
     if max_invocations is None:
@@ -181,11 +273,7 @@ def invoke_with_cap(
             initial_state,
             config={"configurable": {"thread_id": thread_id}},
         )
-        verdict = (
-            result.get("reflexion_final_verdict")
-            or result.get("judge_verdict")
-            or "success"
-        )
+        verdict = result.get("reflexion_final_verdict") or result.get("judge_verdict") or ""
         if verdict in TERMINAL_VERDICTS:
             if invocation > 1:
                 _log.info(
@@ -194,15 +282,26 @@ def invoke_with_cap(
                 )
             break
         _log.warning(
-            "[invocation %d/%d] non-terminal (%s); re-invoking",
+            "[invocation %d/%d] non-terminal (verdict=%r); re-invoking",
             invocation, max_invocations, verdict,
         )
         time.sleep(pause)
     else:
+        # Cap reached without a terminal verdict — do NOT fall through to
+        # REBIRTH as if the run succeeded. Force a failed verdict so the gate
+        # in REBIRTH (and the published metadata / experience record) is
+        # truthful.
         _log.warning(
-            "pipeline_max_invocations=%d reached; stopping",
+            "pipeline_max_invocations=%d reached without a terminal verdict; "
+            "marking the run failed.",
             max_invocations,
         )
+        if result is not None:
+            result = {
+                **result,
+                "reflexion_final_verdict": "failed",
+                "judge_verdict": result.get("judge_verdict") or "fail_refusal",
+            }
     return result
 
 

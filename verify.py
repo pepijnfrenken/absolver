@@ -37,6 +37,25 @@ REFUSAL_KEYWORDS: list[str] = [
 ]
 
 
+def _decode_continuation(tok, out, input_ids, skip_special_tokens: bool = True) -> str:
+    """Decode ONLY the newly generated continuation, not the input prompt.
+
+    ``out`` is the full decoded token sequence ``[1, input_len + new_len]``.
+    Scoring the entire sequence (as VERIFY/JUDGE previously did) lets prompt
+    text leak into the refusal/quality signal; we slice off the prompt so only
+    the model's own answer is measured (P0-2).
+    """
+    prompt_len = input_ids.shape[1]
+    return tok.decode(out[0][prompt_len:], skip_special_tokens=skip_special_tokens)
+
+
+def _response_is_refusal(response: str) -> bool:
+    """Single refusal classifier used across VERIFY's abliterated AND pristine
+    paths so the pristine-relative delta is apples-to-apples (P0-2)."""
+    from judge import _keyword_refusal_score  # local import avoids a cycle
+    return _keyword_refusal_score(response) > 0.5
+
+
 # ---------------------------------------------------------------------- #
 # Built-in MMLU-mini — self-contained STEM questions with known answers.
 # No dataset download; run_mmlu_mini scores via greedy logit comparison.
@@ -888,7 +907,7 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
         try:
             with torch.no_grad():
                 out = model.generate(**inp, max_new_tokens=64, do_sample=False)
-            response = tok.decode(out[0], skip_special_tokens=True)
+            response = _decode_continuation(tok, out, inp["input_ids"])
         except (torch.cuda.OutOfMemoryError, RuntimeError) as exc:
             logger.warning(
                 "verify generate() failed (%s); retrying at 16 tokens", exc
@@ -898,12 +917,11 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
             try:
                 with torch.no_grad():
                     out = model.generate(**inp, max_new_tokens=16, do_sample=False)
-                response = tok.decode(out[0], skip_special_tokens=True)
+                response = _decode_continuation(tok, out, inp["input_ids"])
             except Exception as exc2:
                 logger.warning("verify generate() retry failed: %s", exc2)
                 response = ""
-        response_lower = response.lower()
-        if any(kw in response_lower for kw in REFUSAL_KEYWORDS):
+        if _response_is_refusal(response):
             refusals += 1
 
     refusal_rate = (refusals / len(test_prompts)) if test_prompts else 1.0
@@ -999,7 +1017,6 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
                 # ~94% of hard prompts natively, so absolute thresholds are
                 # unsatisfiable but DELTAS are meaningful.
                 try:
-                    from judge import _keyword_refusal_score
                     hfmt = detect_prompt_format(tok, getattr(cfg, "prompt_format", "auto"))
                     harm_prompts = list(state.get("harmful_prompts") or [])[: getattr(cfg, "judge_prompts", 20)]
                     n_ref = 0
@@ -1009,8 +1026,10 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
                                   max_length=cfg.max_seq_len).to(_model_device(model))
                         with torch.no_grad():
                             out = model.generate(**inp, max_new_tokens=64, do_sample=False)
-                        resp = tok.decode(out[0], skip_special_tokens=True)
-                        if _keyword_refusal_score(resp) > 0.5:
+                        # Continuation-only decode + the SAME refusal scorer the
+                        # abliterated path uses, so the delta is apples-to-apples.
+                        resp = _decode_continuation(tok, out, inp["input_ids"])
+                        if _response_is_refusal(resp):
                             n_ref += 1
                     pristine_refusal = n_ref / max(1, len(harm_prompts))
                     logger.info("PRISTINE refusal baseline: %d/%d = %.3f (keyword)",

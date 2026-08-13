@@ -13,7 +13,7 @@ from llm_api import chat_completion
 from prompt_format import detect_prompt_format, format_prompt
 from prompts import JUDGE_PROMPT_TEMPLATE
 from state import AbliterationState
-from verify import REFUSAL_KEYWORDS
+from verify import REFUSAL_KEYWORDS, _decode_continuation
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +132,7 @@ def judge_node(state: AbliterationState) -> dict[str, Any]:
                     do_sample=do_sample,
                     temperature=judge_temperature if do_sample else None,
                 )
-            responses.append(tok.decode(out[0], skip_special_tokens=True))
+            responses.append(_decode_continuation(tok, out, inp["input_ids"]))
         except Exception as exc:
             # Generation OOM / failure: shrink budget and retry once.
             logger.warning("generate() failed (%s); retrying at 64 tokens", exc)
@@ -144,7 +144,7 @@ def judge_node(state: AbliterationState) -> dict[str, Any]:
                         do_sample=do_sample,
                         temperature=judge_temperature if do_sample else None,
                     )
-                responses.append(tok.decode(out[0], skip_special_tokens=True))
+                responses.append(_decode_continuation(tok, out, inp["input_ids"]))
             except Exception as exc2:
                 logger.warning("generate() retry failed: %s", exc2)
                 responses.append("")
@@ -269,6 +269,17 @@ def judge_node(state: AbliterationState) -> dict[str, Any]:
         judge_status = "failed"
     else:
         judge_status = "degraded"
+
+    # A judge that hard-failed on EVERY prompt produced zero real LLM
+    # verdicts — the aggregate is keyword-fallback only and must NOT be able
+    # to pass. Force a failing verdict so route_after_judge never routes it to
+    # REBIRTH as a pass, and REBIRTH's judge_status gate drops it (P0-2).
+    if judge_status == "failed":
+        verdict = "fail_judge"
+        logger.warning(
+            "JUDGE: all per-prompt LLM calls failed; verdict forced to "
+            "'fail_judge' (result is keyword-fallback only, not publishable)."
+        )
 
     logger.info(
         "JUDGE status=%s judge_errors=%d/%d",

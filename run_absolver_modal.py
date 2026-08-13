@@ -47,40 +47,32 @@ def run_pipeline(config_path: str) -> dict:
     )
 
     from config import load_config
-    from graph import build_abliteration_graph
+    from graph import build_abliteration_graph, invoke_with_cap, warn_missing_keys
 
     config = load_config(config_path)
-    graph = build_abliteration_graph()
+    # Same loud missing-key warning the local runner emits (P1-4).
+    warn_missing_keys(config)
+
+    # Durable checkpoint path: default is inside the ephemeral Modal container.
+    # Point ABSOLVER_CHECKPOINT_PATH at a mounted Modal volume to make the
+    # checkpoint survive container teardown (otherwise a --resume across Modal
+    # invocations has no DB to read). Mirrors the local runner.
+    checkpoint_path = os.environ.get("ABSOLVER_CHECKPOINT_PATH")
+    graph = build_abliteration_graph(checkpoint_path)
     thread_id = Path(config_path).stem
 
     print(f"Starting Absolver pipeline for {config.model_id}")
     print(f"Platform: Modal L4 | Config: {config_path}")
+    if checkpoint_path:
+        print(f"Checkpoint (persistent): {checkpoint_path}")
 
-    # Hard cap on TOTAL pipeline invocations. The in-graph ouroboros/reflexion
-    # counters can reset when reflexion routes back through probe/distill
-    # (their state returns drop ouroboros_count), which caused unbounded
-    # excise->verify->judge->reflexion loops (observed: 2h, 10+ verdicts).
-    # This outer cap guarantees termination no matter what the graph does.
-    import time
-    max_invocations = getattr(config, "pipeline_max_invocations", 3)
-    result = None
-    for invocation in range(1, max_invocations + 1):
-        result = graph.invoke(
-            {"config": config},
-            config={"configurable": {"thread_id": thread_id}},
-        )
-        verdict = result.get("reflexion_final_verdict") or result.get("judge_verdict") or "success"
-        if verdict in ("success", "incompatible", "failed", "pass"):
-            # Terminal states — push happens inside rebirth for 'success'.
-            if invocation > 1:
-                print(f"[invocation {invocation}/{max_invocations}] terminal verdict: {verdict}")
-            break
-        print(f"[invocation {invocation}/{max_invocations}] non-terminal ({verdict}); re-invoking")
-        time.sleep(2)
-    else:
-        print(f"WARNING: hit {max_invocations} invocation cap without a terminal verdict")
+    # Shared runner: identical cap, terminal-verdict handling, and cap-exceeded
+    # failure stamping as the local path (P1-4). Returns the last result dict.
+    result = invoke_with_cap(
+        graph, {"config": config}, thread_id, config=config, pause=2.0
+    )
 
-    print(f"\nAbsolver Complete: {result.get('reflexion_final_verdict', 'success')}")
+    print(f"\nAbsolver Complete: {result.get('reflexion_final_verdict') or result.get('judge_verdict') or 'incomplete'}")
     print(f"Output: {result.get('output_path', 'N/A')}")
     refusal = result.get("judge_refusal_rate")
     if refusal is not None:
@@ -109,7 +101,7 @@ def run_pipeline(config_path: str) -> dict:
             print(f"  [skipped — no runner] {', '.join(sorted(not_run))}")
 
     return {
-        "verdict": result.get("reflexion_final_verdict", "success"),
+        "verdict": result.get("reflexion_final_verdict") or result.get("judge_verdict") or "incomplete",
         "refusal_rate": refusal,
         "quality_mean": quality,
         "benchmark_scores": bench,
