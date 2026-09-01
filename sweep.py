@@ -30,6 +30,7 @@ import torch
 from model_registry import get_model, get_tokenizer
 from prompts import DEFAULT_HARMFUL
 from verify import REFUSAL_KEYWORDS
+from verify import _decode_continuation, _response_is_refusal
 from excise import (
     _project_2d,
     _project_2d_mpoa,
@@ -594,11 +595,14 @@ def _quick_score(model: Any, tok: Any, cfg: Any, prompts: list[str],
             with torch.no_grad():
                 out = model.generate(**inp, max_new_tokens=max_tokens, do_sample=False,
                                      pad_token_id=tok.eos_token_id)
-            resp = tok.decode(out[0], skip_special_tokens=True)
+            # Decode ONLY the continuation (strip the prompt) so refusal
+            # keywords in the prompt don't leak into the score — this was
+            # inflating the sweep's refusal baseline (P0-2 fix, mirrors
+            # VERIFY/gates' _decode_continuation + _response_is_refusal).
+            resp = _decode_continuation(tok, out, inp["input_ids"])
         except Exception:
             resp = ""
-        low = resp.lower()
-        if any(kw in low for kw in REFUSAL_KEYWORDS):
+        if _response_is_refusal(resp):
             refusals += 1
         lengths.append(min(len(resp) / (max_tokens * 4.0), 1.0))
     refusal_rate = refusals / len(prompts) if prompts else 1.0
