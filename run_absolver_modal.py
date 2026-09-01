@@ -168,7 +168,19 @@ def evaluate_sweep_candidate(payload: dict) -> dict:
             else:
                 directions[int(k)] = v
 
-        _apply_candidate(model, directions, None, cand, None)
+        # Rebuild the secondary (stacked) direction set if provided.
+        directions_secondary = None
+        sec_plain = payload.get("directions_secondary") or {}
+        if sec_plain:
+            directions_secondary = {}
+            for k, v in sec_plain.items():
+                if isinstance(v, list):
+                    directions_secondary[int(k)] = torch.tensor(v, dtype=torch.float32)
+                else:
+                    directions_secondary[int(k)] = v
+
+        _apply_candidate(model, directions, None, cand, None,
+                         directions_secondary=directions_secondary)
 
         # Quick-score: generate on a handful of harmful prompts. The scorer
         # needs a config-like object for max_seq_len (only); build a minimal

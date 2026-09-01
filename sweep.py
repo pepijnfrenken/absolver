@@ -172,12 +172,15 @@ def _find_layers(model: Any):
     raise RuntimeError("Cannot locate transformer layers")
 
 
-def _dispatch_parallel_candidate(cand: dict, directions: dict, state: Any, cfg: Any) -> dict:
+def _dispatch_parallel_candidate(cand: dict, directions: dict, state: Any, cfg: Any,
+                                 secondary: dict | None = None) -> dict:
     """Dispatch a single sweep candidate to its own Modal task.
 
     Serializes the candidate + direction tensors (CPU, lists) and calls the
     remote `evaluate_sweep_candidate` function. Falls back to a serialized
     in-process evaluation if Modal is unavailable (local smoke tests).
+
+    ``secondary`` carries the stacked secondary direction set.
 
     Returns the scored result dict merged with the candidate.
     """
@@ -191,10 +194,15 @@ def _dispatch_parallel_candidate(cand: dict, directions: dict, state: Any, cfg: 
             str(k): (v.tolist() if hasattr(v, "tolist") else v)
             for k, v in directions.items()
         }
+        sec_plain = {
+            str(k): (v.tolist() if hasattr(v, "tolist") else v)
+            for k, v in (secondary or state.get("directions_secondary") or {}).items()
+        }
         payload = {
             "model_id": cfg.model_id,
             "candidate": cand,
             "directions": dirs_plain,
+            "directions_secondary": sec_plain,
             "probe_cfg": {
                 "n_directions": cfg.n_directions,
                 "prompt_format": getattr(cfg, "prompt_format", "auto"),
@@ -216,7 +224,8 @@ def _dispatch_parallel_candidate(cand: dict, directions: dict, state: Any, cfg: 
         model, tok = get_model(), get_tokenizer()
         _restore(model, state.get("pristine_state_dict"))
         try:
-            _apply_candidate(model, directions, state.get("pristine_state_dict"), cand, None)
+            _apply_candidate(model, directions, state.get("pristine_state_dict"), cand, None,
+                             directions_secondary=secondary or state.get("directions_secondary") or {})
             score = _quick_score(model, tok, cfg, [], base_logprobs=None)
             return {**cand, **score}
         except Exception as exc2:
@@ -322,6 +331,38 @@ def _apply_bias_vectors(model: Any, layers_mod, directions: dict, candidate: dic
             if bias_mod is not None:
                 w = ff.down_proj.weight.data
                 bias_mod.data.add_(-d.to(device=w.device, dtype=w.dtype) * candidate["alpha"])  # subtract refusal direction from MLP output
+
+
+def _apply_stacked(model: Any, layers_mod, directions: dict, candidate: dict[str, Any],
+                   directions_secondary: dict | None = None) -> None:
+    """Stacked ablation: project BOTH the paired output-phase direction AND
+    the diff_means input-phase direction on the same weights in one pass.
+
+    Proven recipe (diag 2026-09-01): the paired output-phase direction alone
+    RAISES refusal (0.55); the diff_means input-phase direction alone lowers
+    it but not to 0; applying both nets refusal 0.0 on Qwen2.5-1.5B.
+    """
+    secondary = directions_secondary or {}
+    for layer_idx in candidate["target_layers"]:
+        if layer_idx not in directions or layer_idx >= len(layers_mod):
+            continue
+        layer = layers_mod[layer_idx]
+        dirs = directions[layer_idx]
+        d = _as_1d(dirs)
+        d2 = _as_1d(secondary[layer_idx]) if layer_idx in secondary else None
+        for wname in candidate["target_weights"]:
+            if wname == "o_proj" and hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
+                w = layer.self_attn.o_proj.weight.data
+                _project_2d(w, d.to(device=w.device), candidate["alpha"])
+                if d2 is not None:
+                    _project_2d(w, d2.to(device=w.device), candidate["alpha"])
+            elif wname == "down_proj":
+                ff = getattr(layer, "mlp", None) or getattr(layer, "feed_forward", None)
+                if ff is not None and hasattr(ff, "down_proj"):
+                    w = ff.down_proj.weight.data
+                    _project_2d(w, d.to(device=w.device), candidate["alpha"])
+                    if d2 is not None:
+                        _project_2d(w, d2.to(device=w.device), candidate["alpha"])
 
 
 def _apply_direct_ablation(model: Any, layers_mod, directions: dict, candidate: dict[str, Any]) -> None:
@@ -492,7 +533,8 @@ def _apply_steering(model: Any, layers_mod, directions: dict, candidate: dict[st
 
 
 def _apply_candidate(model: Any, directions: dict, pristine: dict | None,
-                     candidate: dict[str, Any], good_dirs: dict | None = None) -> None:
+                     candidate: dict[str, Any], good_dirs: dict | None = None,
+                     directions_secondary: dict | None = None) -> None:
     """Dispatch to the right method for one candidate."""
     layers_mod = _find_layers(model)
     method = candidate["method"]
@@ -507,6 +549,8 @@ def _apply_candidate(model: Any, directions: dict, pristine: dict | None,
             _apply_bias_vectors(model, layers_mod, directions, candidate)
         elif method == "direct_ablation":
             _apply_direct_ablation(model, layers_mod, directions, candidate)
+        elif method == "stacked_ablation":
+            _apply_stacked(model, layers_mod, directions, candidate, directions_secondary)
         elif method == "projected":
             _apply_projected_abliteration(model, layers_mod, directions, good_dirs or {}, candidate)
         elif method == "lora":
@@ -703,6 +747,8 @@ def sweep_node(state: AbliterationState) -> dict[str, Any]:
     # Directions depend on dir_method — cache per method to avoid recompute.
     dir_cache: dict[str, dict[int, torch.Tensor]] = {}
     good_cache: dict[str, dict[int, torch.Tensor]] = {}
+    # Secondary direction cache (diff_means input-phase) for stacked candidates.
+    sec_cache: dict[str, dict[int, torch.Tensor]] = {}
     needs_good = any(c["method"] == "projected" for c in grid)
     if base_directions:
         dir_cache[cfg.dir_method] = base_directions
@@ -761,6 +807,29 @@ def sweep_node(state: AbliterationState) -> dict[str, Any]:
                 logger.info("SWEEP: recomputed directions for dir_method=%s (%d layers)",
                             dm, len(dir_cache[dm]))
         cand_directions = dir_cache[dm]
+        # For stacked_ablation candidates on the 'paired' dir_method, the
+        # secondary direction set (diff_means input-phase) must be available.
+        # Compute it once per dir_method into sec_cache.
+        sec_set = state.get("directions_secondary") or {}
+        n_dirs = max(1, min(cfg.n_directions, state.get("hidden_size", 0) or cfg.n_directions))
+        if cand["method"] == "stacked_ablation" and dm not in sec_cache:
+            if harm_acts and harmless_acts:
+                try:
+                    sec_cache[dm], _ = extract_directions(
+                        harm_acts, harmless_acts,
+                        state.get("num_layers", 0),
+                        state.get("hidden_size", 0),
+                        "diff_means", n_dirs,
+                        "cuda" if torch.cuda.is_available() else "cpu",
+                    )
+                    logger.info("SWEEP: stacked secondary set for dir_method=%s (%d layers)",
+                                dm, len(sec_cache[dm]))
+                except Exception as exc:
+                    logger.warning("SWEEP: stacked secondary extraction failed for %s: %s", dm, exc)
+                    sec_cache[dm] = sec_set
+            else:
+                sec_cache[dm] = sec_set
+        sec_for_cand = sec_cache.get(dm) if cand["method"] == "stacked_ablation" else sec_set
 
         # ------------------------------------------------------------------ #
         # PARALLEL PATH: dispatch this candidate to its own Modal task.
@@ -769,7 +838,8 @@ def sweep_node(state: AbliterationState) -> dict[str, Any]:
         # of N * candidate time. Only worth it for grids > ~8 candidates.
         # ------------------------------------------------------------------ #
         if getattr(cfg, "sweep_parallel", False):
-            results.append(_dispatch_parallel_candidate(cand, cand_directions, state, cfg))
+            results.append(_dispatch_parallel_candidate(cand, cand_directions, state, cfg,
+                                                        secondary=sec_for_cand))
             logger.info(
                 "SWEEP %d/%d: [parallel] method=%s dir=%s layers=%s alpha=%.2f passes=%d → %s",
                 i + 1, len(grid), cand["method"], cand["dir_method"],
@@ -779,7 +849,8 @@ def sweep_node(state: AbliterationState) -> dict[str, Any]:
             continue
 
         _restore(model, pristine)
-        _apply_candidate(model, cand_directions, pristine, cand, good_cache.get(dm))
+        _apply_candidate(model, cand_directions, pristine, cand, good_cache.get(dm),
+                         directions_secondary=sec_for_cand)
         score = _quick_score(model, tok, cfg, test_prompts, base_logprobs=base_logprobs,
                              harmless_prompts=harmless_prompts)
         elapsed = time.perf_counter() - t0
@@ -827,7 +898,10 @@ def sweep_node(state: AbliterationState) -> dict[str, Any]:
         for fi, fin in enumerate(finalists):
             _restore(model, pristine)
             _apply_candidate(model, dir_cache[fin["dir_method"]], pristine, fin,
-                             good_cache.get(fin["dir_method"]))
+                             good_cache.get(fin["dir_method"]),
+                             directions_secondary=sec_cache.get(fin["dir_method"])
+                             if fin["method"] == "stacked_ablation"
+                             else (state.get("directions_secondary") or {}))
             # Generate + LLM-score a small set of harmful prompts.
             refusals = 0
             qualities: list[float] = []

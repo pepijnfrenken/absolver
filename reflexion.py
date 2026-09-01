@@ -206,23 +206,34 @@ def reflexion_node(state: AbliterationState) -> dict:
         kb_matched = list(set(relevant_patterns))
 
     # ------------------------------------------------------------------ #
-    # Diagnose why we're stuck.
+    # Diagnose why we're stuck — gate-aware.
     # ------------------------------------------------------------------ #
     sep_scores = state.get("separation_scores", {}) or {}
     max_sep = max(sep_scores.values(), default=0) if sep_scores else 0
     refusal = state.get("judge_refusal_rate", state.get("refusal_rate", 1.0))
     quality = state.get("judge_quality_mean", 0.5)
+    gate_report = state.get("gate_report") or {}
+    gate_failed: list[str] = [
+        name for name, g in gate_report.items()
+        if isinstance(g, dict) and g.get("passed") is False
+    ]
+    gate_kind: str | None = None
+    if any(n in gate_failed for n in ("refusal", "degeneracy")):
+        gate_kind = "fail_refusal"
+    elif any(n in gate_failed for n in ("coherence", "capability", "perplexity_increase", "first_token_kl")):
+        gate_kind = "fail_quality"
 
     # ------------------------------------------------------------------ #
     # Pick the next strategy from the fallback ladder.
     # ------------------------------------------------------------------ #
     fallback_strategies = cfg.reflexion_strategy_space or [
-        "switch_method",        # weight-projection didn't move refusal → try steering/lora/bias
-        "increase_alpha",       # same method, push alpha harder (steering works at alpha 10)
-        "expand_prompts",       # more prompts = more signal for the sweep
-        "switch_dir_method",    # paired vs diff_means vs svd directions
+        "stacked_ablation",   # paired output-phase + diff_means input-phase (proven 0.0)
+        "switch_method",      # weight-projection didn't move refusal → try steering/lora/bias
+        "increase_alpha",     # same method, push alpha harder (steering works at alpha 10)
+        "expand_prompts",     # more prompts = more signal for the sweep
+        "switch_dir_method",  # paired vs diff_means vs svd directions
         "adjust_alpha",
-        "change_weights",       # o_proj -> o_proj+down_proj etc.
+        "change_weights",     # o_proj -> o_proj+down_proj etc.
         "expand_target_layers",
         "skip_model",
     ]
@@ -232,6 +243,11 @@ def reflexion_node(state: AbliterationState) -> dict:
     else:
         idx = min(attempt - 1, len(fallback_strategies) - 1)
         strategy = fallback_strategies[idx]
+        # Gate-aware override: a quality-failure should never pick a strategy
+        # that pushes alpha harder (that worsens damage). Prefer stacking /
+        # layer changes / method switch.
+        if gate_kind == "fail_quality" and strategy in ("increase_alpha", "adjust_alpha"):
+            strategy = "stacked_ablation"
 
     # ------------------------------------------------------------------ #
     # Optional LLM KB consultation — only on the first attempt.
@@ -281,6 +297,7 @@ def reflexion_node(state: AbliterationState) -> dict:
         "switch_method": "excise",
         "change_weights": "excise",
         "expand_target_layers": "distill",
+        "stacked_ablation": "distill",
         "skip_model": "rebirth",
     }
     next_action = action_map.get(strategy, "rebirth")
@@ -317,6 +334,20 @@ def reflexion_node(state: AbliterationState) -> dict:
 
         ret["harmful_prompts"] = EXPANDED_HARMFUL
         ret["harmless_prompts"] = EXPANDED_HARMLESS
+    elif strategy == "stacked_ablation":
+        # The proven recipe: paired output-phase direction (primary) +
+        # diff_means input-phase direction (secondary), both projected on the
+        # same weights in one excise pass. Requires dir_method='paired' so
+        # DISTILL emits directions_secondary, and method='stacked_ablation'
+        # so EXCISE/SWEEP apply both.
+        ret["config"] = cfg.model_copy(update=dict(
+            dir_method="paired",
+            method="stacked_ablation",
+            sweep_methods=["stacked_ablation"],
+            sweep_dir_methods=["paired"],
+        ))
+        history_entry["stacked"] = True
+        history_entry["tried_method"] = "stacked_ablation"
     elif strategy == "switch_dir_method":
         methods = ["diff_means", "svd", "leace", "whitened_svd"]
         cur = cfg.dir_method

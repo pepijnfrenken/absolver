@@ -272,6 +272,28 @@ def distill_node(state: AbliterationState) -> dict:
         harm_acts, harmless_acts, num_layers, hidden, dir_method, n_dirs, device
     )
 
+    # --- stacked_ablation: also compute the diff_means INPUT-phase direction
+    # set (primary = paired output-phase, secondary = diff_means input-phase).
+    # The proven recipe (diag 2026-09-01): paired output-phase RAISES refusal,
+    # diff_means input-phase REMOVES it; applying both in one excise pass nets
+    # refusal 0.0. Store the secondary set for EXCISE's stacked branch.
+    directions_secondary: dict[int, torch.Tensor] = {}
+    if str(dir_method).lower() == "paired":
+        input_harm = state.get("harm_acts") or {}
+        input_harmless = state.get("harmless_acts") or {}
+        if input_harm and input_harmless:
+            try:
+                directions_secondary, _ = extract_directions(
+                    input_harm, input_harmless, num_layers, hidden,
+                    "diff_means", n_dirs, device,
+                )  # type: ignore[assignment]  # returns (dirs, scores) without return_good_dirs
+                logger.info(
+                    "DISTILL: stacked_ablation secondary set ready (%d layers, diff_means input-phase)",
+                    len(directions_secondary),
+                )
+            except Exception as exc:
+                logger.warning("DISTILL: secondary direction extraction failed: %s", exc)
+
     # Rank layers by separation score, descending.
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
 
@@ -302,4 +324,5 @@ def distill_node(state: AbliterationState) -> dict:
         "refusal_directions": directions,
         "separation_scores": scores,
         "target_layers": target_layers,
+        "directions_secondary": directions_secondary,
     }

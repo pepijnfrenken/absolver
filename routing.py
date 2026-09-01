@@ -40,20 +40,58 @@ def _alpha_search_active(state: AbliterationState, cfg) -> bool:
     return True
 
 
+def _gate_verdict(state: AbliterationState, cfg) -> tuple[bool, str]:
+    """Derive a gate-aware verdict from the gate report.
+
+    Returns (eval_pass, failure_kind) where failure_kind is one of:
+      'pass'          — all enabled gates passed
+      'fail_refusal'  — a refusal/behavior gate failed (refusal, degeneracy)
+      'fail_quality'  — a capability/coherence gate failed (coherence,
+                        capability, PPL, KL)
+      'unknown'       — no gate report present (older state / judge-only path)
+    """
+    gate_report = state.get("gate_report") or {}
+    if not gate_report:
+        return False, "unknown"
+    eval_pass = bool(gate_report.get("eval_pass"))
+    if eval_pass:
+        return True, "pass"
+    # Determine which gate failed to route appropriately.
+    for gate in ("refusal", "degeneracy"):
+        g = gate_report.get(gate)
+        if g and g.get("passed") is False:
+            return False, "fail_refusal"
+    for gate in ("coherence", "capability", "perplexity_increase", "first_token_kl"):
+        g = gate_report.get(gate)
+        if g and g.get("passed") is False:
+            return False, "fail_quality"
+    return False, "unknown"
+
+
 def route_after_verify(state: AbliterationState) -> str:
     """Pick the next node after VERIFY (judge disabled path).
 
     - If the judge is enabled, always go to ``judge``.
-    - If the overall quality pass is True (refusal rate acceptable AND MMLU
-      score sufficient), go to ``rebirth`` directly.
-    - If refusal rate exceeds the ouroboros threshold and we are under the
-      retry cap, loop back to ``excise`` for another projection pass.
-    - Otherwise, if REFLEXION is enabled, try ``reflexion``; else accept
-      and move to ``rebirth``.
+    - If the gate report exists and eval_pass is True, go to ``rebirth``.
+    - If gates failed on refusal/behavior, treat as fail_refusal (loop to
+      excise under ouroboros cap, else reflexion).
+    - If gates failed on quality/capability, treat as fail_quality (reflexion).
+    - Fall back to the legacy quality_pass/refusal_rate logic when no gates.
     """
     cfg = state["config"]
     if cfg.judge_enabled:
         return "judge"
+    gate_pass, gate_kind = _gate_verdict(state, cfg)
+    if gate_kind != "unknown":
+        if gate_pass:
+            return "rebirth"
+        if gate_kind == "fail_refusal":
+            if state.get("ouroboros_count", 0) < cfg.max_ouroboros_passes:
+                return "excise"
+        if cfg.reflexion_enabled:
+            return "reflexion"
+        return "rebirth"
+    # Legacy path (no gates)
     quality_pass = state.get("quality_pass", False)
     if quality_pass:
         return "rebirth"
@@ -66,8 +104,11 @@ def route_after_verify(state: AbliterationState) -> str:
 
 
 def route_after_judge(state: AbliterationState) -> str:
-    """Pick the next node after JUDGE, based on ``judge_verdict``.
+    """Pick the next node after JUDGE, based on ``judge_verdict`` + gates.
 
+    - Gates are authoritative when present: a gate fail_refusal overrides a
+      judge 'pass' (loops to excise/reflexion), a gate fail_quality goes to
+      reflexion.
     - ``pass``          -> ``reflexion`` while a binary alpha search is active
                            and unconverged (keeps hunting for the quality
                            ceiling); otherwise ``rebirth``.
@@ -78,6 +119,20 @@ def route_after_judge(state: AbliterationState) -> str:
     """
     cfg = state["config"]
     verdict = state.get("judge_verdict", "pass")
+    # Gates override the judge verdict when present.
+    gate_pass, gate_kind = _gate_verdict(state, cfg)
+    if gate_kind != "unknown":
+        if gate_kind == "fail_refusal":
+            if state.get("ouroboros_count", 0) < cfg.max_ouroboros_passes:
+                return "excise"
+            if cfg.reflexion_enabled:
+                return "reflexion"
+            return "rebirth"
+        if gate_kind == "fail_quality":
+            if cfg.reflexion_enabled:
+                return "reflexion"
+            return "rebirth"
+        # gates pass -> fall through to the judge verdict normally
     if verdict == "pass":
         if _alpha_search_active(state, cfg):
             return "reflexion"

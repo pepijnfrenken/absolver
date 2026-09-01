@@ -26,7 +26,7 @@ _log = logging.getLogger(__name__)
 # singleton is the single source of truth that SWEEP uses to constrain its
 # candidate box and REFLEXION uses to restrict the switch_method candidate pool.
 EXCISE_REALIZED_METHODS: frozenset[str] = frozenset(
-    {"mpoa", "projection", "advanced", "direct_ablation"}
+    {"mpoa", "projection", "advanced", "direct_ablation", "stacked_ablation"}
 )
 
 
@@ -315,6 +315,29 @@ def excise_node(state: AbliterationState) -> dict[str, Any]:
             layer = decoder.layers[layer_idx]
             modified_weights: list = []
 
+            # --- stacked_ablation: apply TWO directions in one pass ---
+            # Proven recipe (diag, 2026-09-01): first project the paired
+            # output-phase direction (which by itself RAISES refusal), then
+            # project the diff_means input-phase direction (which REMOVES it).
+            # Net effect: refusal 0.0 with the pairing anchored. Requires
+            # directions[layer_idx] = (primary, secondary) tuple OR a second
+            # direction set in directions_secondary.
+            stacked = str(method).lower() == "stacked_ablation"
+            d_second: torch.Tensor | None = None
+            if stacked:
+                d_second = (state.get("directions_secondary") or {}).get(layer_idx)
+                if d_second is not None and torch.is_tensor(d_second) and d_second.dim() > 1:
+                    d_second = d_second.reshape(-1, d_second.shape[-1])[0]
+                if d_second is not None:
+                    d_second = d_second.to(device=device, dtype=dtype)
+                    d_second = d_second / d_second.norm().clamp(min=1e-8)
+                else:
+                    _log.warning(
+                        "EXCISE stacked_ablation: no secondary direction for "
+                        "layer %d; falling back to single-direction projection.",
+                        layer_idx,
+                    )
+
             # --- o_proj (attention output) ---
             # Try both self_attn.o_proj and linear_attn.out_proj; Qwen3.5 hybrid
             # layers use either path depending on the layer. Also handle
@@ -333,6 +356,9 @@ def excise_node(state: AbliterationState) -> dict[str, Any]:
                         _project_2d_mpoa(W, d, alpha)
                     else:
                         _project_2d(W, d, alpha)
+                    # stacked: apply the secondary direction on the same weight
+                    if stacked and d_second is not None:
+                        _project_2d(W, d_second, alpha)
                     o_modified = True
                 if o_modified:
                     modified_weights.append("o_proj")
@@ -350,6 +376,9 @@ def excise_node(state: AbliterationState) -> dict[str, Any]:
                                 _project_2d_mpoa(getattr(mlp, wname).weight.data, d, alpha)
                             else:
                                 _project_2d(getattr(mlp, wname).weight.data, d, alpha)
+                            # stacked: secondary direction on the same weight
+                            if stacked and d_second is not None:
+                                _project_2d(getattr(mlp, wname).weight.data, d_second, alpha)
                             down_modified = True
                 if down_modified:
                     modified_weights.append("down_proj")
