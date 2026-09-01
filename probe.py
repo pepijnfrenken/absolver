@@ -85,9 +85,9 @@ def _make_hook(name: int, store: dict[int, list[torch.Tensor]]):
             return
         try:
             if hs.dim() == 3:
-                store[name].append(hs[:, -1, :].detach().cpu().to(torch.float32))
+                store[name].append(hs[:, -1, :].detach().cpu().to(torch.float32).squeeze(0))
             elif hs.dim() == 2:
-                store[name].append(hs.detach().cpu().to(torch.float32))
+                store[name].append(hs.detach().cpu().to(torch.float32).squeeze(0))
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("hook capture failed on layer %d: %s", name, exc)
 

@@ -8,13 +8,13 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parent
 
 image = (
-    modal.Image.debian_slim(python_version="3.11")
+    modal.Image.debian_slim(python_version="3.11", force_build=True)
     .uv_pip_install(
         "torch>=2.0", "transformers>=4.30", "langgraph>=0.3",
         "pydantic>=2", "pyyaml>=6", "huggingface-hub>=0.20", "numpy>=1.24",
         "accelerate>=0.20",
     )
-    .env({"PYTHONPATH": "/absolver"})
+    .env({"PYTHONPATH": "/absolver", "ABSOLVER_BUILD": "2026-09-01-fix3-hook"})
     .add_local_dir(
         str(PROJECT_DIR), remote_path="/absolver",
         ignore=[".venv", ".git", "__pycache__", "*.pyc", ".aiwg",
