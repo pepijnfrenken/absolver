@@ -1,17 +1,23 @@
 """VERIFY node — refusal-rate check and optional MMLU-mini quality probe."""
 from __future__ import annotations
-from model_registry import get_model, get_tokenizer
-
+import hashlib
 import logging
+import math
 from typing import Any
 
 import torch
 
+from model_registry import get_model, get_tokenizer
 from prompt_format import detect_prompt_format, format_prompt
 
 from state import AbliterationState
 
 logger = logging.getLogger(__name__)
+
+
+def _digest(p: str) -> str:
+    """Prompt digest shared with gates.py for the KL/PPL baseline maps."""
+    return hashlib.sha256(p.encode("utf-8")).hexdigest()
 
 
 def _model_device(model: Any) -> torch.device:
@@ -981,6 +987,8 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
     # ------------------------------------------------------------------ #
     pristine_scores: dict[str, float] = {}
     pristine_refusal: float | None = None
+    pristine_logprobs: dict[str, float] = {}       # prompt-digest -> PPL scalar
+    pristine_logprobs_first: dict[str, Any] = {}   # prompt-digest -> first-token logprob vector
     pristine = state.get("pristine_state_dict")
     if (
         getattr(cfg, "verify_pristine_baseline", True)
@@ -1001,6 +1009,56 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
                     k: v.to(device=dev) if isinstance(v, _torch.Tensor) else v
                     for k, v in pristine.items()
                 })
+                # --- pristine first-token logprobs + per-prompt PPL (for the
+                #     KL and perplexity gates) on the HELD-OUT prompts ---
+                try:
+                    from eval_split import build_split
+                    h_all = list(state.get("harmful_prompts") or [])
+                    h_less = list(state.get("harmless_prompts") or [])
+                    try:
+                        n_pairs = min(len(h_all), len(h_less))
+                        if n_pairs >= 3 * cfg.n_verify_prompts:
+                            split = build_split(
+                                h_all, h_less,
+                                train_size=2 * cfg.n_verify_prompts,
+                                tune_size=cfg.n_verify_prompts,
+                                test_size=cfg.n_verify_prompts,
+                                seed=getattr(cfg, "eval_split_seed", "absolver:qwen25:v1"),
+                            )
+                        elif n_pairs >= 2 * cfg.n_verify_prompts:
+                            split = build_split(
+                                h_all, h_less,
+                                train_size=n_pairs - 2 * cfg.n_verify_prompts,
+                                tune_size=cfg.n_verify_prompts,
+                                test_size=cfg.n_verify_prompts,
+                                seed=getattr(cfg, "eval_split_seed", "absolver:qwen25:v1"),
+                            )
+                        else:
+                            raise ValueError("pool too small")
+                        held_out = list(split.test)
+                    except Exception:
+                        held_out = h_all[2 * cfg.n_verify_prompts: 3 * cfg.n_verify_prompts]
+                    hfmt = detect_prompt_format(tok, getattr(cfg, "prompt_format", "auto"))
+                    for p in held_out:
+                        formatted = format_prompt(tok, p, hfmt)
+                        inp = tok(formatted, return_tensors="pt", truncation=True,
+                                  max_length=cfg.max_seq_len).to(dev)
+                        with _torch.no_grad():
+                            out = model(**inp)
+                        lg = out.logits.float()
+                        # first-token logprob vector (vocab-dim)
+                        lp_first = _torch.log_softmax(lg[0, -1], dim=-1).cpu()
+                        pristine_logprobs_first[_digest(p)] = lp_first
+                        # per-token PPL over the continuation
+                        cont_lg = lg[0, inp["input_ids"].shape[1] - 1: -1]
+                        lp = _torch.log_softmax(cont_lg, dim=-1)
+                        tokens = inp["input_ids"][0, 1:]
+                        chosen = lp.gather(-1, tokens.unsqueeze(-1)).squeeze(-1)
+                        ppl = math.exp(-chosen.sum().item() / max(1, chosen.numel()))
+                        pristine_logprobs[_digest(p)] = ppl
+                    logger.info("PRISTINE first-token logprobs + PPL collected on %d held-out prompts", len(held_out))
+                except Exception as exc:
+                    logger.warning("Pristine logprob collection failed: %s", exc)
                 for bench_name in requested:
                     runner = _RUNNER.get(bench_name)
                     if runner is None:
@@ -1065,6 +1123,71 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
             behavior_report = {}
 
     # ------------------------------------------------------------------ #
+    # 3d. E03-style gate report (held-out split + gates)
+    # ------------------------------------------------------------------ #
+    gate_report: dict[str, Any] = {}
+    try:
+        from gates import run_gates
+        from eval_split import build_split
+        # Held-out TEST split for the gate evaluation — never the sweep
+        # prompts. If we can't build a full split, fall back to a safe
+        # offset slice that avoids the first N prompts (sweep pool).
+        harmful_all = list(state.get("harmful_prompts") or [])
+        harmless_all = list(state.get("harmless_prompts") or [])
+        held_out: list[str] = []
+        try:
+            # Pair to the shorter list; size test = n_verify, tune = n_verify,
+            # train = the rest (or 2*n_verify if the pool is big enough).
+            n_pairs = min(len(harmful_all), len(harmless_all))
+            if n_pairs >= 3 * cfg.n_verify_prompts:
+                split = build_split(
+                    harmful_all, harmless_all,
+                    train_size=2 * cfg.n_verify_prompts,
+                    tune_size=cfg.n_verify_prompts,
+                    test_size=cfg.n_verify_prompts,
+                    seed=getattr(cfg, "eval_split_seed", "absolver:qwen25:v1"),
+                )
+            elif n_pairs >= 2 * cfg.n_verify_prompts:
+                split = build_split(
+                    harmful_all, harmless_all,
+                    train_size=n_pairs - 2 * cfg.n_verify_prompts,
+                    tune_size=cfg.n_verify_prompts,
+                    test_size=cfg.n_verify_prompts,
+                    seed=getattr(cfg, "eval_split_seed", "absolver:qwen25:v1"),
+                )
+            else:
+                raise ValueError(f"pool too small for {cfg.n_verify_prompts} held-out")
+            held_out = list(split.test)
+            logger.info(
+                "E03 split: train=%d tune=%d test=%d (seed=%s)",
+                len(split.train), len(split.tune), len(split.test),
+                split.manifest["seed"],
+            )
+        except Exception as exc:
+            logger.warning("E03 split failed (%s); falling back to offset slice", exc)
+            held_out = harmful_all[2 * cfg.n_verify_prompts: 3 * cfg.n_verify_prompts]
+
+        # pristine first-token logprobs for the KL gate (collected from the
+        # pristine baseline block below; empty here means gate skipped)
+        gate_report = run_gates(
+            model, tok, cfg,
+            prompts=held_out,
+            benchmark_scores=benchmark_scores,
+            pristine_logprobs=pristine_logprobs,
+            pristine_logprobs_first=pristine_logprobs_first,
+        )
+        gate_report["held_out_size"] = len(held_out)
+        logger.info(
+            "GATES: %s | eval_pass=%s",
+            {k: (v["passed"], round(v["value"], 4) if isinstance(v.get("value"), (int, float)) else v.get("value"))
+             for k, v in gate_report.items() if k not in ("_enabled", "eval_pass", "held_out_size")},
+            gate_report.get("eval_pass"),
+        )
+    except Exception as exc:
+        logger.warning("E03 gates failed: %s", exc)
+        gate_report = {"eval_pass": None, "error": str(exc)}
+
+    # ------------------------------------------------------------------ #
     # 4. Model-card comparison table (when targets are provided).
     # ------------------------------------------------------------------ #
     if cfg.model_card_targets and benchmark_scores:
@@ -1095,6 +1218,8 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
         "pristine_scores": pristine_scores,
         "pristine_refusal_rate": pristine_refusal,
         "behavior_report": behavior_report,
+        "gate_report": gate_report,
+        "eval_split_used": held_out[:3],  # small peek for the log/card
     }
 
 
