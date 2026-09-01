@@ -99,7 +99,13 @@ def _project_2d(weight: torch.Tensor, d: torch.Tensor, alpha: float) -> None:
     (device/dtype mismatch, shape issues) are visible, not masked.
     """
     d = d.to(dtype=weight.dtype, device=weight.device)
-    if weight.dim() != 2 or d.shape[0] != weight.shape[1]:
+    if weight.dim() != 2:
+        return
+    if d.dim() > 1:
+        # batch dims from probe hooks must be squeezed before projection —
+        # otherwise the guard below silently skips and the ablation no-ops
+        d = d.reshape(-1)
+    if d.shape[0] != weight.shape[1]:
         # Hybrid architectures (LFM conv layers, fused projections) can
         # expose weights whose input dim != hidden. Skip rather than corrupt.
         return
@@ -133,7 +139,12 @@ def _project_2d_mpoa(weight: torch.Tensor, d: torch.Tensor, alpha: float) -> Non
     purely directional (the removed mass is not silently amplified).
     """
     d = d.to(dtype=weight.dtype, device=weight.device)
-    if weight.dim() != 2 or d.shape[0] != weight.shape[1]:
+    if weight.dim() != 2:
+        return
+    if d.dim() > 1:
+        # batch dims from probe hooks must be squeezed — else silent no-op
+        d = d.reshape(-1)
+    if d.shape[0] != weight.shape[1]:
         return
     try:
         orig_norm = weight.norm().clamp(min=1e-8)

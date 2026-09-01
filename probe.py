@@ -255,7 +255,11 @@ def _collect_paired_output_phase(
             if not steps:
                 continue
             resp = steps[1:] if len(steps) > 1 else steps
-            refusal_acts[i].append(torch.stack(resp).mean(dim=0))
+            # steps are (1, hidden) [batch=1]; squeeze the batch dim so the
+            # mean is a plain 1D hidden vector. Without this, directions stay
+            # (1, hidden) and _project_2d's shape guard (d.shape[0] != W.shape[1])
+            # silently skips the projection — the whole ablation becomes a no-op.
+            refusal_acts[i].append(torch.stack(resp).mean(dim=0).squeeze(0))
 
         # --- affirmative-prefilled condition ---
         store2: dict[int, list[torch.Tensor]] = defaultdict(list)
@@ -284,7 +288,8 @@ def _collect_paired_output_phase(
         for i in range(num_layers):
             steps = store2.get(i)
             if steps:
-                affirm_acts[i].append(torch.stack(steps).mean(dim=0))
+                # same squeeze as the refusal branch — keep directions 1D
+                affirm_acts[i].append(torch.stack(steps).mean(dim=0).squeeze(0))
 
     return dict(refusal_acts), dict(affirm_acts)
 
