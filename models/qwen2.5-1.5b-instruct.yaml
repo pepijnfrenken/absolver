@@ -18,12 +18,15 @@ probe_mode: auto              # collect both input + paired output-phase acts
 # removes Qwen refusal — paired output-phase directions INCREASE refusal on
 # Qwen2.5-1.5B (verified 2026-09-01 on Modal: paired -> 0.55 refusal, diff_means -> 0.0)
 dir_method: diff_means        # base method; sweep also tries paired
-method: mpoa                  # base; sweep also tries advanced
+# 'advanced' = PLAIN projection (no norm rescale) — the method that actually
+# removes refusal (diag: alpha 10, layers 20-27, o_proj+down_proj -> 0.0).
+# 'mpoa' (norm-rescaling) cancels the removal and is the wrong method here.
+method: advanced              # base; sweep also tries mpoa
 n_directions: 3
-alpha: 1.0
+alpha: 10.0
 passes: 1
-target_layers: [26, 27]       # Qwen2.5 refusal lives in the tail
-target_weights: [o_proj]
+target_layers: [20, 24, 26, 27]  # Qwen2.5 refusal lives in the tail (diag-proven)
+target_weights: [o_proj, down_proj]
 paired_prefill: "Sure, I can help with that."
 paired_max_new_tokens: 64
 
@@ -42,15 +45,15 @@ judge_refusal_threshold: 0.05
 judge_quality_threshold: 0.7
 
 # ---- SWEEP: let the pipeline FIND the config (no hand-written recipe) ----
-# Trimmed 2026-09-01 after diag: paired is proven counterproductive on Qwen
-# (raises refusal 0.25->0.55), so diff_means only. mpoa proven; advanced adds
-# unvalidated novelty for the first real run. Grid = 2 layers x 3 alphas x
-# 3 weights x 2 passes = 36 candidates (~20 min on L4).
+# Re-trimmed 2026-09-01 after first full run: mpoa (norm-rescaling) can't
+# remove refusal (winner alpha=1.0, judge 0.50). 'advanced' (plain projection)
+# is the proven method (diag alpha=10). Grid = 2 methods x 2 layers x
+# 2 alphas x 2 weights x 2 passes = 32 candidates (~20 min on L4).
 sweep_enabled: true
-sweep_methods: [mpoa]
+sweep_methods: [advanced, mpoa]
 sweep_dir_methods: [diff_means]
 sweep_layer_sets: [[26, 27], [20, 24, 26, 27]]
-sweep_alphas: [1.0, 4.0, 8.0]
+sweep_alphas: [4.0, 10.0]
 sweep_passes: [1, 2]
 sweep_target_weights: [[o_proj], [down_proj], [o_proj, down_proj]]
 sweep_judge_enabled: true
