@@ -50,9 +50,9 @@ def run_stacked() -> str:
     from prompts import DEFAULT_HARMFUL, DEFAULT_HARMLESS
     from gates import run_gates
     from eval_split import build_split
-    from probe import _find_layers, _make_hook, _to_device, _collect_paired_output_phase
+    from probe import _find_layers, _make_hook, _to_device
     from distill import extract_directions
-    from sweep import _apply_stacked
+    from sweep import _apply_mpoa
     from verify import _digest
 
     cfg = load_config("models/qwen2.5-1.5b-instruct.yaml")
@@ -84,13 +84,7 @@ def run_stacked() -> str:
     hidden = model.config.hidden_size
     dev = "cuda"
 
-    # ---- collect directions (REAL probe for paired; forward hooks for diff_means) ----
-    paired_refusal, paired_affirm = _collect_paired_output_phase(
-        model, tok, train_h, layers, num_layers, dev,
-        cfg.paired_prefill, cfg.paired_max_new_tokens,
-    )
-    print(f"PAIRED: refusal layers={len(paired_refusal)} affirm layers={len(paired_affirm)}")
-
+    # ---- collect directions: diff_means input-phase (the causal one) ----
     def collect_input(prompts):
         from collections import defaultdict
         store: dict = defaultdict(list)
@@ -110,7 +104,7 @@ def run_stacked() -> str:
                     pass
         return dict(store)
 
-    # diff_means input-phase secondary set: train harmful vs the positionally
+    # diff_means input-phase directions: train harmful vs the positionally
     # matched train harmless (build_split pairs h[:n] with g[:n] 1:1).
     h_idx = {p: i for i, p in enumerate(h[:n])}
     train_g = [g[h_idx[p]] for p in train_h if p in h_idx]
@@ -118,11 +112,9 @@ def run_stacked() -> str:
     harm_less_in = collect_input(train_g)
     print(f"DIFF_MEANS input: harm layers={len(harm_in)} harmless layers={len(harm_less_in)}")
 
-    primary, _ = extract_directions(paired_refusal, paired_affirm, num_layers,
-                                    hidden, "paired", 3, dev)
-    secondary, _ = extract_directions(harm_in, harm_less_in, num_layers,
-                                      hidden, "diff_means", 3, dev)
-    print(f"DIRS: primary layers={len(primary)} secondary layers={len(secondary)}")
+    dirs, _ = extract_directions(harm_in, harm_less_in, num_layers,
+                                 hidden, "diff_means", 3, dev)
+    print(f"DIRS: {len(dirs)} layers")
 
     # ---- pristine baselines FIRST (PPL + first-token logprob) on held-out ----
     pristine_logprobs = {}
@@ -148,17 +140,23 @@ def run_stacked() -> str:
     except Exception as exc:
         print("pristine logprob collection failed:", exc)
 
-    # ---- apply the diag-proven stacked corner: alpha=10, L20-27, o+down ----
+    # ---- apply the WINNING config (local CPU evidence 2026-09-02): ----
+    # MPOA alpha=10, tail layers 24-27, o_proj+down_proj (diff_means
+    # input-phase direction). Plain projection is geometrically too weak
+    # (0.03%/pass); MPOA's norm-preserving high-alpha achieves the
+    # effective removal. Steer test showed subtracting ~20*d at MLP output
+    # flips refusal to clean compliance; L24-27 MPOA a=10 is the weight
+    # equivalent that keeps prose coherent (full L20-27 breaks it).
     candidate = {
-        "method": "stacked_ablation",
-        "dir_method": "paired",
-        "target_layers": list(range(20, 28)),
+        "method": "mpoa",
+        "dir_method": "diff_means",
+        "target_layers": list(range(24, 28)),
         "target_weights": ["o_proj", "down_proj"],
         "alpha": 10.0,
         "passes": 1,
     }
-    _apply_stacked(model, layers, primary, candidate, secondary)
-    print(f"APPLIED: L20-27 o_proj+down_proj, alpha=10, paired + diff_means")
+    _apply_mpoa(model, layers, dirs, candidate)
+    print("APPLIED: MPOA L24-27 o_proj+down_proj alpha=10 (diff_means)", flush=True)
 
     # ---- capability (mmlu_mini) + full gates on the ablated model ----
     benchmark_scores = {}
