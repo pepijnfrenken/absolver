@@ -24,3 +24,4 @@ logs/
 # Campaign ablated-model weights — several GB each; keep manifests/configs
 # in git, keep the safetensors on disk as artifacts only
 campaigns/**/model.safetensors
+abl-work/

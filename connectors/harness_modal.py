@@ -28,12 +28,13 @@ image = (
         "pyyaml>=6",
         "huggingface-hub>=0.20",
         "safetensors>=0.4",
+        "pydantic>=2",
     )
     .env({"PYTHONPATH": "/absolver"})
     .add_local_dir(  # must be LAST build step
         str(_PROJECT_DIR),
         remote_path="/absolver",
-        ignore=[".venv", ".git", "__pycache__", "*.pyc", ".aiwg", "abliterated_models", "campaigns", "experiments"],
+        ignore=[".venv", ".git", "__pycache__", "*.pyc", ".aiwg", "abliterated_models", "campaigns", "experiments", "abl-work"],
     )
 )
 

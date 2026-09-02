@@ -1,0 +1,1444 @@
+{
+  "a": "LiquidAI/LFM2.5-1.2B-Instruct",
+  "b": "huihui-ai/Huihui-LFM2.5-1.2B-Instruct-abliterated",
+  "n_keys_a": 148,
+  "n_keys_b": 148,
+  "common": 148,
+  "identical": 116,
+  "differing": 32,
+  "only_a": [],
+  "only_b": [],
+  "group_summary": {
+    "attn": {
+      "n_diff": 6,
+      "n_identical": 30,
+      "max_abs": 0.02069854736328125,
+      "rel_l2": 0.029482421351654305,
+      "touched": 6
+    },
+    "conv": {
+      "n_diff": 10,
+      "n_identical": 20,
+      "max_abs": 0.039306640625,
+      "rel_l2": 0.029109765290071973,
+      "touched": 10
+    },
+    "embed/lm_head": {
+      "n_diff": 0,
+      "n_identical": 1,
+      "max_abs": 0.0,
+      "rel_l2": 0.0,
+      "touched": 0
+    },
+    "ffn": {
+      "n_diff": 16,
+      "n_identical": 32,
+      "max_abs": 0.03533935546875,
+      "rel_l2": 0.02999909559369269,
+      "touched": 16
+    },
+    "norm": {
+      "n_diff": 0,
+      "n_identical": 33,
+      "max_abs": 0.0,
+      "rel_l2": 0.0,
+      "touched": 0
+    }
+  },
+  "rows": [
+    {
+      "tensor": "model.embed_tokens.weight",
+      "group": "embed/lm_head",
+      "status": "identical",
+      "shape": [
+        65536,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.embedding_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.0.conv.conv.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        2048,
+        1,
+        3
+      ]
+    },
+    {
+      "tensor": "model.layers.0.conv.in_proj.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        6144,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.0.conv.out_proj.weight",
+      "group": "conv",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        2048
+      ],
+      "max_abs": 0.004593,
+      "rel_l2": 0.021905,
+      "n_diff_elems": 3292342
+    },
+    {
+      "tensor": "model.layers.0.feed_forward.w1.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.0.feed_forward.w2.weight",
+      "group": "ffn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        8192
+      ],
+      "max_abs": 0.00351,
+      "rel_l2": 0.022004,
+      "n_diff_elems": 13315860
+    },
+    {
+      "tensor": "model.layers.0.feed_forward.w3.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.0.ffn_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.0.operator_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.1.conv.conv.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        2048,
+        1,
+        3
+      ]
+    },
+    {
+      "tensor": "model.layers.1.conv.in_proj.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        6144,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.1.conv.out_proj.weight",
+      "group": "conv",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        2048
+      ],
+      "max_abs": 0.004761,
+      "rel_l2": 0.022244,
+      "n_diff_elems": 3313456
+    },
+    {
+      "tensor": "model.layers.1.feed_forward.w1.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.1.feed_forward.w2.weight",
+      "group": "ffn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        8192
+      ],
+      "max_abs": 0.003662,
+      "rel_l2": 0.022361,
+      "n_diff_elems": 13324861
+    },
+    {
+      "tensor": "model.layers.1.feed_forward.w3.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.1.ffn_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.1.operator_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.10.feed_forward.w1.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.10.feed_forward.w2.weight",
+      "group": "ffn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        8192
+      ],
+      "max_abs": 0.035339,
+      "rel_l2": 0.026697,
+      "n_diff_elems": 13558758
+    },
+    {
+      "tensor": "model.layers.10.feed_forward.w3.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.10.ffn_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.10.operator_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.10.self_attn.k_layernorm.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        64
+      ]
+    },
+    {
+      "tensor": "model.layers.10.self_attn.k_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        512,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.10.self_attn.out_proj.weight",
+      "group": "attn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        2048
+      ],
+      "max_abs": 0.020699,
+      "rel_l2": 0.028838,
+      "n_diff_elems": 3423965
+    },
+    {
+      "tensor": "model.layers.10.self_attn.q_layernorm.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        64
+      ]
+    },
+    {
+      "tensor": "model.layers.10.self_attn.q_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        2048,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.10.self_attn.v_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        512,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.11.conv.conv.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        2048,
+        1,
+        3
+      ]
+    },
+    {
+      "tensor": "model.layers.11.conv.in_proj.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        6144,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.11.conv.out_proj.weight",
+      "group": "conv",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        2048
+      ],
+      "max_abs": 0.039307,
+      "rel_l2": 0.027012,
+      "n_diff_elems": 3384223
+    },
+    {
+      "tensor": "model.layers.11.feed_forward.w1.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.11.feed_forward.w2.weight",
+      "group": "ffn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        8192
+      ],
+      "max_abs": 0.014893,
+      "rel_l2": 0.023798,
+      "n_diff_elems": 13523156
+    },
+    {
+      "tensor": "model.layers.11.feed_forward.w3.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.11.ffn_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.11.operator_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.12.feed_forward.w1.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.12.feed_forward.w2.weight",
+      "group": "ffn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        8192
+      ],
+      "max_abs": 0.012352,
+      "rel_l2": 0.023104,
+      "n_diff_elems": 13406054
+    },
+    {
+      "tensor": "model.layers.12.feed_forward.w3.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.12.ffn_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.12.operator_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.12.self_attn.k_layernorm.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        64
+      ]
+    },
+    {
+      "tensor": "model.layers.12.self_attn.k_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        512,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.12.self_attn.out_proj.weight",
+      "group": "attn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        2048
+      ],
+      "max_abs": 0.014648,
+      "rel_l2": 0.023742,
+      "n_diff_elems": 3352664
+    },
+    {
+      "tensor": "model.layers.12.self_attn.q_layernorm.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        64
+      ]
+    },
+    {
+      "tensor": "model.layers.12.self_attn.q_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        2048,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.12.self_attn.v_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        512,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.13.conv.conv.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        2048,
+        1,
+        3
+      ]
+    },
+    {
+      "tensor": "model.layers.13.conv.in_proj.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        6144,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.13.conv.out_proj.weight",
+      "group": "conv",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        2048
+      ],
+      "max_abs": 0.020508,
+      "rel_l2": 0.023521,
+      "n_diff_elems": 3363614
+    },
+    {
+      "tensor": "model.layers.13.feed_forward.w1.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.13.feed_forward.w2.weight",
+      "group": "ffn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        8192
+      ],
+      "max_abs": 0.013092,
+      "rel_l2": 0.02287,
+      "n_diff_elems": 13428512
+    },
+    {
+      "tensor": "model.layers.13.feed_forward.w3.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.13.ffn_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.13.operator_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.14.feed_forward.w1.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.14.feed_forward.w2.weight",
+      "group": "ffn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        8192
+      ],
+      "max_abs": 0.007563,
+      "rel_l2": 0.021666,
+      "n_diff_elems": 13373901
+    },
+    {
+      "tensor": "model.layers.14.feed_forward.w3.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.14.ffn_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.14.operator_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.14.self_attn.k_layernorm.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        64
+      ]
+    },
+    {
+      "tensor": "model.layers.14.self_attn.k_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        512,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.14.self_attn.out_proj.weight",
+      "group": "attn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        2048
+      ],
+      "max_abs": 0.014153,
+      "rel_l2": 0.021835,
+      "n_diff_elems": 3340939
+    },
+    {
+      "tensor": "model.layers.14.self_attn.q_layernorm.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        64
+      ]
+    },
+    {
+      "tensor": "model.layers.14.self_attn.q_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        2048,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.14.self_attn.v_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        512,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.15.conv.conv.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        2048,
+        1,
+        3
+      ]
+    },
+    {
+      "tensor": "model.layers.15.conv.in_proj.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        6144,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.15.conv.out_proj.weight",
+      "group": "conv",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        2048
+      ],
+      "max_abs": 0.013855,
+      "rel_l2": 0.022247,
+      "n_diff_elems": 3327537
+    },
+    {
+      "tensor": "model.layers.15.feed_forward.w1.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.15.feed_forward.w2.weight",
+      "group": "ffn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        8192
+      ],
+      "max_abs": 0.009308,
+      "rel_l2": 0.021993,
+      "n_diff_elems": 13389621
+    },
+    {
+      "tensor": "model.layers.15.feed_forward.w3.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.15.ffn_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.15.operator_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.2.feed_forward.w1.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.2.feed_forward.w2.weight",
+      "group": "ffn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        8192
+      ],
+      "max_abs": 0.00415,
+      "rel_l2": 0.022248,
+      "n_diff_elems": 13258310
+    },
+    {
+      "tensor": "model.layers.2.feed_forward.w3.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.2.ffn_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.2.operator_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.2.self_attn.k_layernorm.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        64
+      ]
+    },
+    {
+      "tensor": "model.layers.2.self_attn.k_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        512,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.2.self_attn.out_proj.weight",
+      "group": "attn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        2048
+      ],
+      "max_abs": 0.004883,
+      "rel_l2": 0.022448,
+      "n_diff_elems": 3344180
+    },
+    {
+      "tensor": "model.layers.2.self_attn.q_layernorm.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        64
+      ]
+    },
+    {
+      "tensor": "model.layers.2.self_attn.q_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        2048,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.2.self_attn.v_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        512,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.3.conv.conv.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        2048,
+        1,
+        3
+      ]
+    },
+    {
+      "tensor": "model.layers.3.conv.in_proj.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        6144,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.3.conv.out_proj.weight",
+      "group": "conv",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        2048
+      ],
+      "max_abs": 0.008743,
+      "rel_l2": 0.02298,
+      "n_diff_elems": 3332529
+    },
+    {
+      "tensor": "model.layers.3.feed_forward.w1.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.3.feed_forward.w2.weight",
+      "group": "ffn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        8192
+      ],
+      "max_abs": 0.004089,
+      "rel_l2": 0.022506,
+      "n_diff_elems": 13313185
+    },
+    {
+      "tensor": "model.layers.3.feed_forward.w3.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.3.ffn_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.3.operator_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.4.conv.conv.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        2048,
+        1,
+        3
+      ]
+    },
+    {
+      "tensor": "model.layers.4.conv.in_proj.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        6144,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.4.conv.out_proj.weight",
+      "group": "conv",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        2048
+      ],
+      "max_abs": 0.007324,
+      "rel_l2": 0.022023,
+      "n_diff_elems": 3316846
+    },
+    {
+      "tensor": "model.layers.4.feed_forward.w1.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.4.feed_forward.w2.weight",
+      "group": "ffn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        8192
+      ],
+      "max_abs": 0.005676,
+      "rel_l2": 0.022157,
+      "n_diff_elems": 13366807
+    },
+    {
+      "tensor": "model.layers.4.feed_forward.w3.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.4.ffn_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.4.operator_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.5.feed_forward.w1.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.5.feed_forward.w2.weight",
+      "group": "ffn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        8192
+      ],
+      "max_abs": 0.004486,
+      "rel_l2": 0.024023,
+      "n_diff_elems": 13424112
+    },
+    {
+      "tensor": "model.layers.5.feed_forward.w3.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.5.ffn_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.5.operator_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.5.self_attn.k_layernorm.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        64
+      ]
+    },
+    {
+      "tensor": "model.layers.5.self_attn.k_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        512,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.5.self_attn.out_proj.weight",
+      "group": "attn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        2048
+      ],
+      "max_abs": 0.007324,
+      "rel_l2": 0.023972,
+      "n_diff_elems": 3358000
+    },
+    {
+      "tensor": "model.layers.5.self_attn.q_layernorm.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        64
+      ]
+    },
+    {
+      "tensor": "model.layers.5.self_attn.q_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        2048,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.5.self_attn.v_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        512,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.6.conv.conv.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        2048,
+        1,
+        3
+      ]
+    },
+    {
+      "tensor": "model.layers.6.conv.in_proj.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        6144,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.6.conv.out_proj.weight",
+      "group": "conv",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        2048
+      ],
+      "max_abs": 0.012726,
+      "rel_l2": 0.022768,
+      "n_diff_elems": 3312020
+    },
+    {
+      "tensor": "model.layers.6.feed_forward.w1.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.6.feed_forward.w2.weight",
+      "group": "ffn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        8192
+      ],
+      "max_abs": 0.00769,
+      "rel_l2": 0.024643,
+      "n_diff_elems": 13453459
+    },
+    {
+      "tensor": "model.layers.6.feed_forward.w3.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.6.ffn_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.6.operator_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.7.conv.conv.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        2048,
+        1,
+        3
+      ]
+    },
+    {
+      "tensor": "model.layers.7.conv.in_proj.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        6144,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.7.conv.out_proj.weight",
+      "group": "conv",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        2048
+      ],
+      "max_abs": 0.016602,
+      "rel_l2": 0.024354,
+      "n_diff_elems": 3346275
+    },
+    {
+      "tensor": "model.layers.7.feed_forward.w1.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.7.feed_forward.w2.weight",
+      "group": "ffn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        8192
+      ],
+      "max_abs": 0.012451,
+      "rel_l2": 0.024055,
+      "n_diff_elems": 13365322
+    },
+    {
+      "tensor": "model.layers.7.feed_forward.w3.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.7.ffn_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.7.operator_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.8.feed_forward.w1.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.8.feed_forward.w2.weight",
+      "group": "ffn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        8192
+      ],
+      "max_abs": 0.014458,
+      "rel_l2": 0.029999,
+      "n_diff_elems": 13627844
+    },
+    {
+      "tensor": "model.layers.8.feed_forward.w3.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.8.ffn_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.8.operator_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.8.self_attn.k_layernorm.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        64
+      ]
+    },
+    {
+      "tensor": "model.layers.8.self_attn.k_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        512,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.8.self_attn.out_proj.weight",
+      "group": "attn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        2048
+      ],
+      "max_abs": 0.010803,
+      "rel_l2": 0.029482,
+      "n_diff_elems": 3402837
+    },
+    {
+      "tensor": "model.layers.8.self_attn.q_layernorm.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        64
+      ]
+    },
+    {
+      "tensor": "model.layers.8.self_attn.q_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        2048,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.8.self_attn.v_proj.weight",
+      "group": "attn",
+      "status": "identical",
+      "shape": [
+        512,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.9.conv.conv.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        2048,
+        1,
+        3
+      ]
+    },
+    {
+      "tensor": "model.layers.9.conv.in_proj.weight",
+      "group": "conv",
+      "status": "identical",
+      "shape": [
+        6144,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.9.conv.out_proj.weight",
+      "group": "conv",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        2048
+      ],
+      "max_abs": 0.012573,
+      "rel_l2": 0.02911,
+      "n_diff_elems": 3372064
+    },
+    {
+      "tensor": "model.layers.9.feed_forward.w1.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.9.feed_forward.w2.weight",
+      "group": "ffn",
+      "status": "DIFF",
+      "shape": [
+        2048,
+        8192
+      ],
+      "max_abs": 0.008118,
+      "rel_l2": 0.025074,
+      "n_diff_elems": 13446473
+    },
+    {
+      "tensor": "model.layers.9.feed_forward.w3.weight",
+      "group": "ffn",
+      "status": "identical",
+      "shape": [
+        8192,
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.9.ffn_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    },
+    {
+      "tensor": "model.layers.9.operator_norm.weight",
+      "group": "norm",
+      "status": "identical",
+      "shape": [
+        2048
+      ]
+    }
+  ],
+  "rows_truncated": false
+}
