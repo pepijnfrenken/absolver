@@ -511,6 +511,10 @@ def _apply_lora_delta(w: torch.Tensor, v: torch.Tensor, alpha: float) -> None:
 # restores weights between candidates, but hooks are NOT weights — they must
 # be explicitly removed, or they stack across candidates.
 _STEERING_HOOKS: list[Any] = []
+# layer_idx -> resolved hook-target module path for the last _apply_steering
+# call. Evidence for steer-test: proves the hook landed on the conv path
+# output, not an accidental whole-block fallback.
+_STEERING_TARGETS: dict[int, str] = {}
 
 
 def _clear_steering_hooks() -> None:
@@ -521,6 +525,7 @@ def _clear_steering_hooks() -> None:
         except Exception:
             pass
     _STEERING_HOOKS.clear()
+    _STEERING_TARGETS.clear()
 
 
 def _apply_steering(model: Any, layers_mod, directions: dict, candidate: dict[str, Any]) -> None:
@@ -565,21 +570,34 @@ def _apply_steering(model: Any, layers_mod, directions: dict, candidate: dict[st
                 return output
             return hook
 
-        # Hook the residual stream output of the block (what the next block
-        # consumes). Prefer 'mlp.down_proj' output as the post-MLP residual
-        # contribution; fall back to the block module itself.
+        # Hook the residual-stream contribution output of the block, in the
+        # same convention as attention steering: the submodule whose output
+        # is ADDED to the residual (what the next block consumes). Prefer
+        # 'mlp.down_proj' output (Llama-class), then 'self_attn.o_proj'
+        # (attention), then the 'conv' path output on LFM2 hybrid conv
+        # blocks (in_proj -> causal conv -> out_proj; the whole Lfm2ShortConv
+        # returns that y). Fall back to the block module itself.
         hook_target = None
         ff = getattr(layer, "mlp", None) or getattr(layer, "feed_forward", None)
         if ff is not None and hasattr(ff, "down_proj"):
             hook_target = ff.down_proj
         elif hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
             hook_target = layer.self_attn.o_proj
+        elif hasattr(layer, "conv"):
+            hook_target = layer.conv
         else:
             hook_target = layer
+        if hook_target is layer:
+            target_path = f"{type(layer).__name__}"
+        else:
+            target_path = next(
+                (nm for nm, m in layer.named_modules() if m is hook_target), "?")
         h = hook_target.register_forward_hook(make_hook(steered, layer_idx))
         _STEERING_HOOKS.append(h)
-    logger.info("STEERING: attached hooks on %d layers, alpha=%.1f",
-                len(candidate["target_layers"]), float(candidate["alpha"]))
+        _STEERING_TARGETS[int(layer_idx)] = target_path
+    logger.info("STEERING: attached hooks on %d layers, alpha=%.1f: %s",
+                len(candidate["target_layers"]), float(candidate["alpha"]),
+                _STEERING_TARGETS)
 
 
 def _apply_candidate(model: Any, directions: dict, pristine: dict | None,

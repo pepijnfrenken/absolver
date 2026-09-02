@@ -624,7 +624,7 @@ def cmd_collect(config_path: str, model_dir: str | None, transcript: bool,
 
 def cmd_steer_test(config_path: str, alphas_spec: str, n_directions: int | None,
                    n_prompts: int | None, layers_spec: str | None,
-                   flavor: str | None) -> int:
+                   flavor: str | None, from_directions: str | None = None) -> int:
     """Alpha grid x few prompts: transcripts + refusal + PPL per alpha.
 
     Non-destructive (runtime steering hooks/bias vectors — no weight edits,
@@ -638,7 +638,7 @@ def cmd_steer_test(config_path: str, alphas_spec: str, n_directions: int | None,
     import math
     from probe import _find_layers, _make_hook, _collect_paired_output_phase
     from distill import extract_directions
-    from sweep import _apply_steering, _clear_steering_hooks
+    from sweep import _apply_steering, _clear_steering_hooks, _STEERING_TARGETS
     from prompts import DEFAULT_HARMFUL, DEFAULT_HARMLESS
     from prompt_format import format_prompt
     from verify import _decode_continuation, _response_is_refusal
@@ -655,14 +655,34 @@ def cmd_steer_test(config_path: str, alphas_spec: str, n_directions: int | None,
                          if _resolve_proj(layers[li], "o_proj") is not None]
     dm = getattr(cfg, "dir_method", "diff_means")
 
-    # ---- cheap direction harvest (flavor-aware, CPU-reduced) ----
+    # ---- direction source: reuse a saved bundle, else cheap harvest ----
+    # (flavor-aware, CPU-reduced). Reuse keeps the steer test on the SAME
+    # directions the weight-edits used (evidence continuity).
     n_dir = n_directions or min(10, getattr(cfg, "n_probe_prompts", 20))
     h_dir = [format_prompt(tok, p, flavor) for p in list(DEFAULT_HARMFUL)[:n_dir]]
     g_dir = [format_prompt(tok, p, flavor) for p in list(DEFAULT_HARMLESS)[:n_dir]]
-    if dm == "paired":
+    directions_source = f"harvest: {dm} n={n_dir}"
+    hook_targets: dict[str, str] = {}
+    if from_directions:
+        bundle = torch.load(from_directions, map_location="cpu",
+                            weights_only=True)
+        raw_dirs = bundle.get("dirs", bundle)
+        dirs = {int(k): v for k, v in raw_dirs.items()}
+        scores = {int(k): float(v)
+                  for k, v in (bundle.get("scores") or {}).items()}
+        dm = bundle.get("dir_method", dm)
+        n_dir = bundle.get("n_prompts", n_dir)
+        directions_source = (f"file:{Path(from_directions).name} "
+                             f"({dm}, n={n_dir})")
+        print(f"steer-test: reusing directions from {from_directions} "
+              f"[{bundle.get('dir_method', '?')}, flavor="
+              f"{bundle.get('flavor', '?')}, n={n_dir}]")
+    elif dm == "paired":
         prefill = getattr(cfg, "paired_prefill", "Sure, I can help with that.")
         max_new = getattr(cfg, "paired_max_new_tokens", 64)
         acts_h, acts_g = _collect_paired_output_phase(model, tok, h_dir, layers, num_layers, "cpu", prefill, max_new)
+        dirs, scores = extract_directions(acts_h, acts_g, num_layers, hidden, dm, 3, "cpu")
+        directions_source = f"harvest: paired n={n_dir}"
     else:
         from collections import defaultdict
         store_h, store_g = defaultdict(list), defaultdict(list)
@@ -680,7 +700,7 @@ def cmd_steer_test(config_path: str, alphas_spec: str, n_directions: int | None,
                     except Exception: pass
             return dict(store)
         acts_h, acts_g = _collect(h_dir, store_h), _collect(g_dir, store_g)
-    dirs, scores = extract_directions(acts_h, acts_g, num_layers, hidden, dm, 3, "cpu")
+        dirs, scores = extract_directions(acts_h, acts_g, num_layers, hidden, dm, 3, "cpu")
     no_dir = [li for li in target_layers if li not in dirs]
     if no_dir:
         print(f"WARNING: no direction for target layers {no_dir}; they will not steer")
@@ -733,6 +753,7 @@ def cmd_steer_test(config_path: str, alphas_spec: str, n_directions: int | None,
                                                   "target_layers": target_layers,
                                                   "alpha": alpha,
                                                   "target_weights": []})
+            hook_targets = dict(_STEERING_TARGETS)
         refusals = 0
         ppl_incs = []
         gen = []
@@ -786,7 +807,9 @@ def cmd_steer_test(config_path: str, alphas_spec: str, n_directions: int | None,
     (out_dir / path.name).write_text(json.dumps({
         "model_id": cfg.model_id, "dir_method": dm, "prompt_flavor": flavor,
         "target_layers": target_layers, "alphas": [0.0] + alphas,
-        "n_directions": n_dir, "separation_scores": {str(k): v for k, v in scores.items()},
+        "n_directions": n_dir, "directions_source": directions_source,
+        "hook_targets": hook_targets,
+        "separation_scores": {str(k): v for k, v in scores.items()},
         "rows": rows, "generations": transcript,
         "time": time.strftime("%Y-%m-%d %H:%M:%S")}, indent=2, default=str), encoding="utf-8")
     print(f"\nSteer-test evidence -> {out_dir / path.name}")
@@ -881,10 +904,14 @@ def main() -> int:
     p.add_argument("--n-directions", type=int, default=None, help="prompts for the direction harvest (default 10; CPU cost control)")
     p.add_argument("--n-prompts", type=int, default=3, help="harmful test prompts per alpha (default 3)")
     p.add_argument("--layers", default=None, help="target layers (default: config target_layers)")
+    p.add_argument("--from-directions", default=None,
+                   help="reuse a saved directions bundle (*.pt) instead of harvesting; "
+                        "keeps the steer test on the SAME directions the weight-edits used")
     p.add_argument("--prompt-flavor", default=None, choices=["raw", "chat"],
                    help="prompt flavor for directions + test prompts (default: config prompt_flavor)")
     p.set_defaults(fn=lambda a: cmd_steer_test(a.config, a.alphas, a.n_directions,
-                                               a.n_prompts, a.layers, a.prompt_flavor))
+                                               a.n_prompts, a.layers, a.prompt_flavor,
+                                               a.from_directions))
 
     p = sub.add_parser("list-campaigns", help="list campaign statuses")
     p.set_defaults(fn=lambda a: cmd_list_campaigns())
