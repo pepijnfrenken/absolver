@@ -250,8 +250,52 @@ def _as_1d(dirs) -> torch.Tensor:
     return torch.as_tensor(d).reshape(-1)
 
 
+def _resolve_proj(layer: Any, wname: str):
+    """Resolve a canonical weight name to the ACTUAL projection module on a
+    layer, across architectures. Returns None when the layer has no such
+    projection — callers must SKIP, never crash (and the harness reports
+    zero matches as a hard failure, not a silent no-op).
+
+    Naming differences handled:
+      - llama-style:      self_attn.o_proj / mlp.down_proj (square o_proj)
+      - LFM2.5 attention: self_attn.out_proj / feed_forward.w2
+      - MoE:              mlp.experts[*].down_proj  (returns the list)
+      - LFM2.5 conv only: no self_attn at all -> None (conv layers must
+        NEVER be projected; their conv/in_proj/out_proj weight is 3D and
+        hidden-space directions do not apply).
+
+    This closes the silent-skip hole where the old code only matched the
+    canonical name: '--weights o_proj' on LFM2.5 matched NOTHING and the
+    whole ablation silently no-op'd while printing "Applied ...".
+    """
+    if wname == "expert.down":
+        mlp = getattr(layer, "mlp", None)
+        experts = getattr(mlp, "experts", None) if mlp is not None else None
+        if experts is not None:
+            return [e for e in experts if hasattr(e, "down_proj")]
+        return None
+    if wname == "o_proj":
+        attn = getattr(layer, "self_attn", None)
+        if attn is None:
+            return None
+        mod = getattr(attn, "o_proj", None)
+        if mod is None:
+            mod = getattr(attn, "out_proj", None)
+        return mod if mod is not None and hasattr(mod, "weight") else None
+    if wname == "down_proj":
+        ff = getattr(layer, "mlp", None) or getattr(layer, "feed_forward", None)
+        if ff is None:
+            return None
+        mod = getattr(ff, "down_proj", None)
+        if mod is None:
+            mod = getattr(ff, "w2", None)
+        return mod if mod is not None and hasattr(mod, "weight") else None
+    return None
+
+
 def _apply_advanced(model: Any, layers_mod, directions: dict, candidate: dict[str, Any]) -> None:
     """Weight projection (diff-means / SVD / LEACE — the current method)."""
+    applied = candidate.setdefault("_applied", [])
     for layer_idx in candidate["target_layers"]:
         if layer_idx not in directions or layer_idx >= len(layers_mod):
             continue
@@ -259,22 +303,23 @@ def _apply_advanced(model: Any, layers_mod, directions: dict, candidate: dict[st
         dirs = directions[layer_idx]
         d = _as_1d(dirs)
         for wname in candidate["target_weights"]:
-            if wname == "o_proj" and hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
-                w = layer.self_attn.o_proj.weight.data  # .data detaches autograd (like excise)
+            mods = _resolve_proj(layer, wname)
+            if not mods:
+                continue
+            projs = mods if isinstance(mods, list) else [mods]
+            for mod in projs:
+                w = mod.weight.data  # .data detaches autograd (like excise)
+                w0 = w.clone()
+                before = float(w0.norm().item())
                 _project_2d(w, d.to(device=w.device), candidate["alpha"])
-            elif wname == "down_proj":
-                ff = getattr(layer, "mlp", None) or getattr(layer, "feed_forward", None)
-                if ff is not None and hasattr(ff, "down_proj"):
-                    w = ff.down_proj.weight.data
-                    _project_2d(w, d.to(device=w.device), candidate["alpha"])
-                elif hasattr(layer, "feed_forward") and hasattr(layer.feed_forward, "down_proj"):
-                    w = layer.feed_forward.down_proj.weight.data
-                    _project_2d(w, d.to(device=w.device), candidate["alpha"])
-            elif wname == "expert.down" and hasattr(layer, "mlp") and hasattr(layer.mlp, "experts"):
-                for expert in layer.mlp.experts:
-                    if hasattr(expert, "down_proj"):
-                        w = expert.down_proj.weight.data
-                        _project_2d(w, d.to(device=w.device), candidate["alpha"])
+                after = float(w.norm().item())
+                rel = float((w0 - w).norm().item()) / max(before, 1e-12)
+                applied.append({
+                    "layer": layer_idx, "weight": wname,
+                    "shape": list(w.shape),
+                    "rel_change": round(rel, 6),
+                    "norm_before": round(before, 4), "norm_after": round(after, 4),
+                })
 
 
 def _apply_mpoa(model: Any, layers_mod, directions: dict, candidate: dict[str, Any]) -> None:
@@ -285,6 +330,7 @@ def _apply_mpoa(model: Any, layers_mod, directions: dict, candidate: dict[str, A
     (e.g. 2.0 on all six attention blocks) removes refusal without
     collapsing the layer output scale.
     """
+    applied = candidate.setdefault("_applied", [])
     for layer_idx in candidate["target_layers"]:
         if layer_idx not in directions or layer_idx >= len(layers_mod):
             continue
@@ -292,22 +338,23 @@ def _apply_mpoa(model: Any, layers_mod, directions: dict, candidate: dict[str, A
         dirs = directions[layer_idx]
         d = _as_1d(dirs)
         for wname in candidate["target_weights"]:
-            if wname == "o_proj" and hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
-                w = layer.self_attn.o_proj.weight.data
+            mods = _resolve_proj(layer, wname)
+            if not mods:
+                continue
+            projs = mods if isinstance(mods, list) else [mods]
+            for mod in projs:
+                w = mod.weight.data
+                w0 = w.clone()
+                before = float(w0.norm().item())
                 _project_2d_mpoa(w, d.to(device=w.device), candidate["alpha"])
-            elif wname == "down_proj":
-                ff = getattr(layer, "mlp", None) or getattr(layer, "feed_forward", None)
-                if ff is not None and hasattr(ff, "down_proj"):
-                    w = ff.down_proj.weight.data
-                    _project_2d_mpoa(w, d.to(device=w.device), candidate["alpha"])
-                elif hasattr(layer, "feed_forward") and hasattr(layer.feed_forward, "down_proj"):
-                    w = layer.feed_forward.down_proj.weight.data
-                    _project_2d_mpoa(w, d.to(device=w.device), candidate["alpha"])
-            elif wname == "expert.down" and hasattr(layer, "mlp") and hasattr(layer.mlp, "experts"):
-                for expert in layer.mlp.experts:
-                    if hasattr(expert, "down_proj"):
-                        w = expert.down_proj.weight.data
-                        _project_2d_mpoa(w, d.to(device=w.device), candidate["alpha"])
+                after = float(w.norm().item())
+                rel = float((w0 - w).norm().item()) / max(before, 1e-12)
+                applied.append({
+                    "layer": layer_idx, "weight": wname,
+                    "shape": list(w.shape),
+                    "rel_change": round(rel, 6),
+                    "norm_before": round(before, 4), "norm_after": round(after, 4),
+                })
 
 
 def _apply_bias_vectors(model: Any, layers_mod, directions: dict, candidate: dict[str, Any]) -> None:
@@ -542,6 +589,15 @@ def _apply_candidate(model: Any, directions: dict, pristine: dict | None,
     layers_mod = _find_layers(model)
     method = candidate["method"]
     passes = max(1, candidate["passes"])
+    if passes > 1 and pristine is not None:
+        # restore+reapply on the pristine snapshot yields the same final
+        # weights as a single pass — passes>1 is a silent no-op here.
+        logger.warning(
+            "SWEEP: candidate passes=%d with pristine restore is a NO-OP "
+            "(weights restored before each pass, projection is deterministic) "
+            "— the pass count has no effect on the final model.",
+            passes,
+        )
 
     for i in range(passes):
         if method == "advanced":
