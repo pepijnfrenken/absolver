@@ -88,7 +88,18 @@ def _load_model_tok(cfg):
     tok = AutoTokenizer.from_pretrained(cfg.model_id, trust_remote_code=trust)
     if tok.pad_token_id is None:
         tok.pad_token_id = tok.eos_token_id
+    _place_on_device(model, cfg)
     return model, tok
+
+
+def _place_on_device(model, cfg) -> None:
+    """Honor the config's ``device`` axis: 'auto'/'cuda' moves the model to
+    CUDA when available. Prevents silent CPU inference in GPU containers
+    (Modal L4) where gates/mmlu generation would otherwise crawl."""
+    import torch
+    device = str(getattr(cfg, "device", "auto")).lower()
+    if device in ("auto", "cuda", "gpu") and torch.cuda.is_available():
+        model.to("cuda")
 
 
 def _parse_layers(spec: str):
@@ -569,10 +580,12 @@ def cmd_collect(config_path: str, model_dir: str | None, transcript: bool,
                 print(f"  pristine mmlu_mini: {pristine_benchmark_scores['mmlu']:.3f}")
             except Exception as exc:
                 print(f"WARNING: pristine mmlu_mini failed: {exc}")
+            from verify import _model_device
+            pdev = _model_device(pmodel)
             for p in held_out:
                 formatted = format_prompt(ptok, p, flavor_r)
                 inp = ptok(formatted, return_tensors="pt", truncation=True,
-                           max_length=cfg.max_seq_len)
+                           max_length=cfg.max_seq_len).to(pdev)
                 with torch.no_grad():
                     out = pmodel(**inp)
                 lg = out.logits.float()
@@ -603,6 +616,7 @@ def cmd_collect(config_path: str, model_dir: str | None, transcript: bool,
             model_dir, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True,
             trust_remote_code=True)
         tok = AutoTokenizer.from_pretrained(model_dir)
+        _place_on_device(model, cfg)
     else:
         model, tok = _load_model_tok(cfg)
     if tok.pad_token_id is None:

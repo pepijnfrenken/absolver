@@ -25,3 +25,4 @@ logs/
 # in git, keep the safetensors on disk as artifacts only
 campaigns/**/model.safetensors
 abl-work/
+phase2-staging/
