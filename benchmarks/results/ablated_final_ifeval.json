@@ -1,0 +1,55 @@
+{
+  "meta": {
+    "model_id": "PinoCookie/LFM2.5-1.2B-Instruct-Abliterated",
+    "tag": "ablated_final_ifeval",
+    "tasks": [
+      "ifeval"
+    ],
+    "limit": null,
+    "seed": 1234,
+    "batch_size": "auto",
+    "lm_eval_version": "0.4.13",
+    "torch_version": "2.13.0+cu130",
+    "transformers_version": "5.14.1",
+    "elapsed_sec": 3142.3,
+    "timestamp": "2026-09-02T15:59:00Z"
+  },
+  "results": {
+    "ifeval": {
+      "name": "ifeval",
+      "alias": "ifeval",
+      "sample_len": 541,
+      "prompt_level_strict_acc,none": 0.5268022181146026,
+      "prompt_level_strict_acc_stderr,none": 0.021485638661937957,
+      "inst_level_strict_acc,none": 0.6235011990407674,
+      "inst_level_strict_acc_stderr,none": "N/A",
+      "prompt_level_loose_acc,none": 0.5656192236598891,
+      "prompt_level_loose_acc_stderr,none": 0.02133047365756473,
+      "inst_level_loose_acc,none": 0.6510791366906474,
+      "inst_level_loose_acc_stderr,none": "N/A"
+    }
+  },
+  "config": {
+    "model": "hf",
+    "model_args": "pretrained=PinoCookie/LFM2.5-1.2B-Instruct-Abliterated,trust_remote_code=True,dtype=bfloat16",
+    "model_num_parameters": 1170340608,
+    "model_dtype": "torch.bfloat16",
+    "model_revision": "main",
+    "model_sha": "8a161ceb9451e0f4f286e2c713266a6bc416f5a1",
+    "batch_size": "auto",
+    "batch_sizes": [],
+    "device": null,
+    "use_cache": null,
+    "limit": null,
+    "bootstrap_iters": 100000,
+    "gen_kwargs": null,
+    "random_seed": 1234,
+    "numpy_seed": 1234,
+    "torch_seed": 1234,
+    "fewshot_seed": 1234
+  },
+  "groups": {},
+  "versions": {
+    "ifeval": 4.0
+  }
+}

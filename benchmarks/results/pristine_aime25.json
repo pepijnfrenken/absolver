@@ -1,0 +1,27 @@
+{
+  "meta": {
+    "model_id": "LiquidAI/LFM2.5-1.2B-Instruct",
+    "tag": "pilot_gpqa_aime",
+    "tasks": [
+      "gpqa_diamond_n_shot",
+      "aime25"
+    ],
+    "limit": null,
+    "seed": 1234,
+    "batch_size": "auto",
+    "lm_eval_version": "0.4.13",
+    "torch_version": "2.13.0+cu130",
+    "transformers_version": "5.14.1",
+    "elapsed_sec": 292.9,
+    "timestamp": "2026-09-02T14:36:00Z"
+  },
+  "results": {
+    "aime25": {
+      "name": "aime25",
+      "alias": "aime25",
+      "sample_len": 30,
+      "exact_match,none": 0.0,
+      "exact_match_stderr,none": 0.0
+    }
+  }
+}

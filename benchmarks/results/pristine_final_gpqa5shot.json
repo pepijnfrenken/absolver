@@ -1,0 +1,53 @@
+{
+  "meta": {
+    "model_id": "LiquidAI/LFM2.5-1.2B-Instruct",
+    "tag": "pristine_final_gpqa5shot",
+    "tasks": [
+      "gpqa_diamond_n_shot"
+    ],
+    "limit": null,
+    "seed": 1234,
+    "batch_size": "auto",
+    "lm_eval_version": "0.4.13",
+    "torch_version": "2.13.0+cu130",
+    "transformers_version": "5.14.1",
+    "elapsed_sec": 232.9,
+    "timestamp": "2026-09-02T16:02:07Z"
+  },
+  "results": {
+    "gpqa_diamond_n_shot": {
+      "name": "gpqa_diamond_n_shot",
+      "alias": "gpqa_diamond_n_shot",
+      "sample_len": 198,
+      "acc,none": 0.21717171717171718,
+      "acc_stderr,none": 0.02937661648494563,
+      "acc_norm,none": 0.21717171717171718,
+      "acc_norm_stderr,none": 0.02937661648494563
+    }
+  },
+  "config": {
+    "model": "hf",
+    "model_args": "pretrained=LiquidAI/LFM2.5-1.2B-Instruct,trust_remote_code=True,dtype=bfloat16",
+    "model_num_parameters": 1170340608,
+    "model_dtype": "torch.bfloat16",
+    "model_revision": "main",
+    "model_sha": "0f604ada3f766f9f257460c4c9f0b5d6f69d431b",
+    "batch_size": "auto",
+    "batch_sizes": [
+      9
+    ],
+    "device": null,
+    "use_cache": null,
+    "limit": null,
+    "bootstrap_iters": 100000,
+    "gen_kwargs": null,
+    "random_seed": 1234,
+    "numpy_seed": 1234,
+    "torch_seed": 1234,
+    "fewshot_seed": 1234
+  },
+  "groups": {},
+  "versions": {
+    "gpqa_diamond_n_shot": 2.2
+  }
+}

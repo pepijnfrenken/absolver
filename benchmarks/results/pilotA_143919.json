@@ -1,0 +1,62 @@
+{
+  "meta": {
+    "model_id": "PinoCookie/LFM2.5-1.2B-Instruct-Abliterated",
+    "tag": "pilot_gpqa_aime",
+    "tasks": [
+      "gpqa_diamond_n_shot",
+      "aime25"
+    ],
+    "limit": null,
+    "seed": 1234,
+    "batch_size": "auto",
+    "lm_eval_version": "0.4.13",
+    "torch_version": "2.13.0+cu130",
+    "transformers_version": "5.14.1",
+    "elapsed_sec": 375.6,
+    "timestamp": "2026-09-02T14:39:19Z"
+  },
+  "results": {
+    "gpqa_diamond_n_shot": {
+      "name": "gpqa_diamond_n_shot",
+      "alias": "gpqa_diamond_n_shot",
+      "sample_len": 198,
+      "acc,none": 0.23737373737373738,
+      "acc_stderr,none": 0.030313710538198906,
+      "acc_norm,none": 0.23737373737373738,
+      "acc_norm_stderr,none": 0.030313710538198906
+    },
+    "aime25": {
+      "name": "aime25",
+      "alias": "aime25",
+      "sample_len": 30,
+      "exact_match,none": 0.06666666666666667,
+      "exact_match_stderr,none": 0.046320555585310084
+    }
+  },
+  "config": {
+    "model": "hf",
+    "model_args": "pretrained=PinoCookie/LFM2.5-1.2B-Instruct-Abliterated,trust_remote_code=True,dtype=bfloat16",
+    "model_num_parameters": 1170340608,
+    "model_dtype": "torch.bfloat16",
+    "model_revision": "main",
+    "model_sha": "8a161ceb9451e0f4f286e2c713266a6bc416f5a1",
+    "batch_size": "auto",
+    "batch_sizes": [
+      13
+    ],
+    "device": null,
+    "use_cache": null,
+    "limit": null,
+    "bootstrap_iters": 100000,
+    "gen_kwargs": null,
+    "random_seed": 1234,
+    "numpy_seed": 1234,
+    "torch_seed": 1234,
+    "fewshot_seed": 1234
+  },
+  "groups": {},
+  "versions": {
+    "aime25": 0.0,
+    "gpqa_diamond_n_shot": 2.2
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "meta": {
+    "model_id": "LiquidAI/LFM2.5-1.2B-Instruct",
+    "tag": "pristine_final_ifeval",
+    "tasks": [
+      "ifeval"
+    ],
+    "limit": null,
+    "seed": 1234,
+    "batch_size": "auto",
+    "lm_eval_version": "0.4.13",
+    "torch_version": "2.13.0+cu130",
+    "transformers_version": "5.14.1",
+    "elapsed_sec": 2374.0,
+    "timestamp": "2026-09-02T15:46:09Z"
+  },
+  "results": {
+    "ifeval": {
+      "name": "ifeval",
+      "alias": "ifeval",
+      "sample_len": 541,
+      "prompt_level_strict_acc,none": 0.5471349353049908,
+      "prompt_level_strict_acc_stderr,none": 0.02142075394952956,
+      "inst_level_strict_acc,none": 0.6486810551558753,
+      "inst_level_strict_acc_stderr,none": "N/A",
+      "prompt_level_loose_acc,none": 0.5914972273567468,
+      "prompt_level_loose_acc_stderr,none": 0.021153244098720367,
+      "inst_level_loose_acc,none": 0.6786570743405276,
+      "inst_level_loose_acc_stderr,none": "N/A"
+    }
+  },
+  "config": {
+    "model": "hf",
+    "model_args": "pretrained=LiquidAI/LFM2.5-1.2B-Instruct,trust_remote_code=True,dtype=bfloat16",
+    "model_num_parameters": 1170340608,
+    "model_dtype": "torch.bfloat16",
+    "model_revision": "main",
+    "model_sha": "0f604ada3f766f9f257460c4c9f0b5d6f69d431b",
+    "batch_size": "auto",
+    "batch_sizes": [],
+    "device": null,
+    "use_cache": null,
+    "limit": null,
+    "bootstrap_iters": 100000,
+    "gen_kwargs": null,
+    "random_seed": 1234,
+    "numpy_seed": 1234,
+    "torch_seed": 1234,
+    "fewshot_seed": 1234
+  },
+  "groups": {},
+  "versions": {
+    "ifeval": 4.0
+  }
+}

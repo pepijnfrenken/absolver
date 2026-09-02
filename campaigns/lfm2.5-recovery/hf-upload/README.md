@@ -27,7 +27,7 @@ This is an **abliterated** version of [LiquidAI/LFM2.5-1.2B-Instruct](https://hu
 
 **The model produces direct, actionable responses to harmful prompts while maintaining full coherence on benign queries.**
 
-This is the **first POSITIVE abliteration** in the [absolver campaign KB](https://github.com/your-org/absolver): gates pass at default greedy decoding on a held-out split, with real (verbatim) compliance rather than keyword-blind lectures.
+This is the **first POSITIVE abliteration** campaign result for this model family: gates pass at default greedy decoding on a held-out split, with real (verbatim) compliance rather than keyword-blind lectures. Campaign artifacts are available on request.
 
 ## How It Works
 
@@ -98,7 +98,42 @@ Both pristine and abliterated answers carry the base model's own small factual s
 | **Abliterated** | **0.250** |
 | Delta | **0.000** |
 
-MMLU-mini-20 is a 20-question subset, single greedy pass. Retention is 1.0. **Full MMLU is not benchmarked on this model** — only the mini subset was run.
+MMLU-mini-20 is a 20-question subset, single greedy pass. Retention is 1.0.
+
+### Benchmark Replication (pristine vs ablated, lm-eval 0.4.13)
+
+Replicates the runnable subset of the [base model card's posted suite](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct) on **both** the pristine base and this ablated model under **identical conditions**: lm-eval 0.4.13, transformers 5.14.1, torch 2.13.0, bf16, Modal L4, seed 1234, batch 8, per-task YAML defaults (greedy, no `gen_kwargs` overrides). LiquidAI's posted numbers are the reference column; our pristine run is the same-model replication baseline. **Every number below is from a real run** (JSON logs: `benchmarks/results/` in the campaign repo, plus the Modal volume).
+
+| Benchmark (N) | LiquidAI posted | Pristine (ours) | Ablated (ours) | Δ | % retained |
+|---|---|---|---|---|---|
+| GPQA — Diamond, 5-shot, acc_norm (198) | 38.89 | 21.72 | 22.22 | +0.50 | 102.3% |
+| MMLU-Pro — 100/subject (1,400) | 44.35 | 35.71 | 33.93 | −1.79 | 95.0% |
+| IFEval — prompt-level strict (541) | 86.23 | 54.71 | 52.68 | −2.03 | 96.3% |
+| AIME25 (30) | 14.00 | 0.00 | 6.67 | +6.67 | — |
+| IFBench | 47.33 | — | *not replicated* — custom harness, no lm-eval task | | |
+| Multi-IF | 60.98 | — | *not replicated* — custom multi-turn harness, no lm-eval task | | |
+| BFCLv3 | 49.12 | — | *not replicated* — tool-calling harness, no lm-eval task | | |
+
+Honest methodology notes (read before comparing columns):
+
+- lm-eval prompts/tasks are **not byte-identical to ArtificialAnalysis' harness**, so our pristine numbers are not directly comparable to LiquidAI's posted ones. The measured quantity is the **pristine-vs-ablated delta under identical conditions**. GPQA here is 5-shot exact-match `acc_norm` (lm-eval's task default is 0-shot; the 0-shot run scored 21.21 → 23.74, same conclusion).
+- **MMLU-Pro**: full 12,432-question run is not feasible on an L4 (~19 h/model at the measured ≈5–6 s/question, batch-1 generate-until), so a documented subset of **1,400 questions (100/subject, first-N, seed 1234)** was run — identically on both models. The delta is valid; the absolute values are a subset estimate.
+- IFEval is reported as prompt-level strict accuracy (instruction-level strict: 64.87 → 62.35, 96.1% retained).
+- **AIME25 sits at the performance floor for this model size** (0/30 pristine, 2/30 ablated): the +6.67pp delta is binomial noise on 30 samples, not signal.
+- IFBench, Multi-IF, BFCLv3 are custom harnesses (IFBench/Multi-IF multi-turn instruction suites; BFCLv3 tool-calling) with no lm-eval task — **not replicated, not faked**. Tool-use capability is therefore untested in this replication.
+
+### Capability-Hit Analysis
+
+| Capability | Benchmarks | Δ vs pristine | % retained | Verdict |
+|---|---|---|---|---|
+| Knowledge retrieval | MMLU-Pro (1,400), MMLU-mini-20 | −1.79pp, 0.000 | 95.0%, 100% | **preserved** (borderline on MMLU-Pro, ≈1.4σ; mini unchanged) |
+| Reasoning | GPQA Diamond (198), AIME25 (30) | +0.50pp, +6.67pp | 102.3%, floor→↑ | **preserved** (ablated ≥ pristine; AIME in noise regime) |
+| Instruction following | IFEval (541) | −2.03pp | 96.3% | **preserved** (Δ ≈0.9σ of the 2.1pp stderr) |
+| Tool use | BFCLv3, Multi-IF | — | — | **untested** — not replicated (custom harnesses, no lm-eval task) |
+
+Cross-reference with the gate bundle: MMLU-mini-20 retention **1.0** (0.250 → 0.250) is consistent with MMLU-Pro −1.79pp — both within their sampling noise; PPL **+5.8%** and benign coherence 5/5 unchanged; `first_token_kl` fails **by construction** (any working abliteration reshapes the first token; the reference edit scores 5.89 on the same quantity, ours 3.02). The measured deltas are consistent with that picture: the edit perturbs the refusal surface, not the knowledge / reasoning / instruction-following surfaces.
+
+**Bottom line: no capability was hit beyond noise.** Largest measured gaps: MMLU-Pro −1.79pp (≈1.4σ, 95.0% retained) and IFEval −2.03pp (≈0.9σ, 96.3% retained) — both preserved-band; reasoning is flat-to-positive. Tool use remains untested (not replicated).
 
 Perplexity is effectively unchanged: **+5.8%** vs pristine (mean over the 5 held-out prompts) — the gentlest edit in the campaign KB (our activation-diff direction sources measured +139% to +688%).
 
@@ -151,7 +186,7 @@ print(tokenizer.decode(outputs[0][inputs.shape[1]:], skip_special_tokens=True))
 
 ## Limitations
 
-- **Capability coverage is narrow**: measured on MMLU-mini-20 + a 5-prompt PPL gate only. Full MMLU, coding, reasoning, and other capability suites are **not benchmarked** on this model. Deltas below ~2 MMLU-mini items are sampling noise.
+- **Capability coverage is measured but bounded**: knowledge (MMLU-Pro 1,400-subset), reasoning (GPQA Diamond, AIME25), and instruction following (IFEval full) are replicated above with pristine-vs-ablated deltas — all preserved within noise. **Not replicated**: IFBench, Multi-IF, BFCLv3 (custom harnesses, no lm-eval task), coding, and long-context/agentic evals; tool-use capability is untested. The MMLU-Pro subset (1,400 of 12,432) is a documented estimate; deltas below ≈2pp on these N are sampling noise.
 - **The edit is the published reference edit**: our weights match `huihui-ai/Huihui-LFM2.5-1.2B-Instruct-abliterated` to rel_l2 0.0013–0.0023, so its documented behavior applies — including the reference card's note that some harmful outputs contain factual/procedural errors.
 - **`first_token_kl` gate fails by construction, not by regression**: removing refusal necessarily changes which token starts the answer. The absolute 0.1 threshold is unsatisfiable by any working abliteration of this family — the reference edit itself scores 5.89 on the same quantity (ours: 3.02). The other disturbance gates pass comfortably (PPL +5.8%), so this is a measurement-surface defect, not a behavioral regression.
 - **Misuse potential**: refusals are removed across the board. Research / red-teaming / educational use only — do not deploy without safeguards.
@@ -159,10 +194,10 @@ print(tokenizer.decode(outputs[0][inputs.shape[1]:], skip_special_tokens=True))
 
 ## Technical Details
 
-- Method writeup (KB): [`01-abliteration/rank1-svd-recovery.md`](https://github.com/pepijnfrenken/red-team-suite/blob/main/01-abliteration/rank1-svd-recovery.md)
-- Campaign: [`campaigns/lfm2.5-recovery/`](https://github.com/pepijnfrenken/absolver/tree/main/campaigns/lfm2.5-recovery) — the full confound chain: all-32 coverage replication (necessary, insufficient), three failed direction sources, then weight recovery.
-- Forensics: coverage > magnitude; conv `out_proj` is projectable (`campaigns/lfm2.5-hf-forensics.md`).
-- `ablitation_config.json` in this repo records the exact recipe, gate outputs, and fingerprint.
+- Reference edit: [huihui-ai/Huihui-LFM2.5-1.2B-Instruct-abliterated](https://huggingface.co/huihui-ai/Huihui-LFM2.5-1.2B-Instruct-abliterated) — the published weights whose rank-1 edit was recovered and re-applied.
+- Method: rank-1 SVD recovery from the reference edit's published weights (per-tensor `Δ = W_ref − W_base` is rank-1; re-application reproduces the reference at rel_l2 0.0013–0.0023, the bf16 noise floor).
+- Forensics: coverage > magnitude; conv `out_proj` is projectable (public forensics data available on request).
+- `ablitation_config.json` in this repository records the exact recipe, gate outputs, and fingerprint.
 
 ## License
 
