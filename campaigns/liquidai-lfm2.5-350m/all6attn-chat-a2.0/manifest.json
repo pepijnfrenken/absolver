@@ -1,0 +1,93 @@
+{
+  "model_id": "LiquidAI/LFM2.5-350M",
+  "method": "mpoa",
+  "dir_method": "paired",
+  "probe_mode": "paired",
+  "prefill": "Sure, I can help with that.",
+  "flavor": "chat",
+  "from_directions": "campaigns/liquidai-lfm2.5-350m/directions-chat.pt",
+  "alpha": 2.0,
+  "passes": 1,
+  "layers": [
+    2,
+    5,
+    8,
+    10,
+    12,
+    14
+  ],
+  "weights": [
+    "o_proj"
+  ],
+  "n_probe_prompts": 10,
+  "weight_changes": [
+    {
+      "layer": 2,
+      "weight": "o_proj",
+      "shape": [
+        1024,
+        1024
+      ],
+      "rel_change": 0.127551,
+      "norm_before": 12.25,
+      "norm_after": 12.25
+    },
+    {
+      "layer": 5,
+      "weight": "o_proj",
+      "shape": [
+        1024,
+        1024
+      ],
+      "rel_change": 0.11352,
+      "norm_before": 12.25,
+      "norm_after": 12.25
+    },
+    {
+      "layer": 8,
+      "weight": "o_proj",
+      "shape": [
+        1024,
+        1024
+      ],
+      "rel_change": 0.098985,
+      "norm_before": 12.3125,
+      "norm_after": 12.3125
+    },
+    {
+      "layer": 10,
+      "weight": "o_proj",
+      "shape": [
+        1024,
+        1024
+      ],
+      "rel_change": 0.081754,
+      "norm_before": 13.1875,
+      "norm_after": 13.1875
+    },
+    {
+      "layer": 12,
+      "weight": "o_proj",
+      "shape": [
+        1024,
+        1024
+      ],
+      "rel_change": 0.101351,
+      "norm_before": 13.875,
+      "norm_after": 13.875
+    },
+    {
+      "layer": 14,
+      "weight": "o_proj",
+      "shape": [
+        1024,
+        1024
+      ],
+      "rel_change": 0.072151,
+      "norm_before": 17.0,
+      "norm_after": 17.0
+    }
+  ],
+  "config": "models/lfm2.5-350m.yaml",
+  "time": "2026-09-02 10:27:25"
+}

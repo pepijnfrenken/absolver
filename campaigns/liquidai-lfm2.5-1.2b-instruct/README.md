@@ -48,6 +48,14 @@ recommended_next: [bias_vector_residual_hook, raw_vs_chat_eval_axis, alpha_respo
 
 # Campaign: LiquidAI LFM2.5-1.2B-Instruct — first campaign on the guided harness
 
+> **Round 2 (2026-09-02): the flavor fix was re-run and REFUTED.** See
+> [campaigns/lfm2.5-flavorfix-reruns/README.md](../lfm2.5-flavorfix-reruns/README.md)
+> — chat-flavored paired directions, same recipe, gates + transcripts + a
+> steer-test. Verdict: chat refusal 3/5→4/5 (worse), PPL +16.2%, KL 0.886,
+> and the steering window at attention layers is empty (any α≥1 collapses
+> generation). The `raw-vs-chat` gap below is closed as a *mechanism*; the
+> real blocker is refusal/quality entanglement in the attention subspace.
+
 ## TL;DR
 
 The known-good recipe was applied **for real** (weight-change fingerprint matches the

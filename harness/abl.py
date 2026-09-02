@@ -234,7 +234,8 @@ def cmd_inspect(config_path: str) -> int:
 # directions
 # --------------------------------------------------------------------------- #
 
-def cmd_directions(config_path: str, n_prompts: int | None, flavor: str | None) -> int:
+def cmd_directions(config_path: str, n_prompts: int | None, flavor: str | None,
+                   dir_method: str | None) -> int:
     import torch
     cfg = _load_cfg(config_path)
     model, tok = _load_model_tok(cfg)
@@ -272,7 +273,7 @@ def cmd_directions(config_path: str, n_prompts: int | None, flavor: str | None) 
     # direction targets the measured mechanism (TOOLKIT-FEEDBACK §1b).
     h_f = [format_prompt(tok, p, flavor) for p in h]
     g_f = [format_prompt(tok, p, flavor) for p in g]
-    dm = getattr(cfg, "dir_method", "diff_means")
+    dm = dir_method or getattr(cfg, "dir_method", "diff_means")
     probe_mode = "input"
     prefill = None
     if dm == "paired":
@@ -362,6 +363,8 @@ def cmd_abl(config_path: str, method: str, alpha: float, layers_spec: str,
         probe_mode = data.get("probe_mode", "?")
         prefill = data.get("prefill")
         n_dirs = int(data.get("n_prompts", 0) or 0)
+        if data.get("dir_method"):
+            dm = data["dir_method"]  # the file is the authority on what was computed
         print(f"Loaded {len(dirs)} layer directions from {from_directions} "
               f"(dir_method={data.get('dir_method')}, flavor={data.get('flavor')}, "
               f"n_prompts={n_dirs})")
@@ -841,7 +844,9 @@ def main() -> int:
     p.add_argument("--n-prompts", type=int, default=None, help="override n_probe_prompts (CPU cost control)")
     p.add_argument("--prompt-flavor", default=None, choices=["raw", "chat"],
                    help="prompt flavor for the harvest (default: config prompt_flavor, which is 'chat')")
-    p.set_defaults(fn=lambda a: cmd_directions(a.config, a.n_prompts, a.prompt_flavor))
+    p.add_argument("--dir-method", default=None, choices=["diff_means", "paired", "svd", "leace"],
+                   help="direction extraction override (default: config dir_method)")
+    p.set_defaults(fn=lambda a: cmd_directions(a.config, a.n_prompts, a.prompt_flavor, a.dir_method))
 
     p = sub.add_parser("abl", help="apply ONE config to a fresh model")
     p.add_argument("config")

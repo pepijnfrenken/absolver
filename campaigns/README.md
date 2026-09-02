@@ -24,6 +24,7 @@ campaigns/
 
 | Campaign | Model | Date | Status | TL;DR |
 |---|---|---|---|---|
+| [lfm2.5-flavorfix-reruns](lfm2.5-flavorfix-reruns/README.md) | LFM2.5 family ×3 | 2026-09-02 | NEGATIVE | Flavor fix shipped (TOOLKIT-FEEDBACK 1-7) but refuted as root cause: chat-flavored paired directions don't pass on 1.2B-Instruct (3/5→4/5), flip 350M (4/5→1/5) into pseudo-guide collapse, never touch Thinking's trace refusals; steer-test proves the attention-layer window is empty |
 | [qwen2.5-1.5b-instruct](qwen2.5-1.5b-instruct/README.md) | Qwen2.5-1.5B-Instruct | 2026-09-02 | NEGATIVE | Refusal direction is causal (steering -20 flips it) but no single-shot weight config passes the gates; 6 pipeline bugs found & fixed |
 | [minicpm5-experiment-log](../experiments/minicpm5-experiment-log.md) | MiniCPM5 | — | log | (legacy experiment log, not yet migrated to campaign format) |
 
