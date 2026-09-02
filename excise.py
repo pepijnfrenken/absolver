@@ -105,11 +105,29 @@ def _project_2d(weight: torch.Tensor, d: torch.Tensor, alpha: float) -> None:
         # batch dims from probe hooks must be squeezed before projection —
         # otherwise the guard below silently skips and the ablation no-ops
         d = d.reshape(-1)
-    if d.shape[0] != weight.shape[1]:
-        # Hybrid architectures (LFM conv layers, fused projections) can
-        # expose weights whose input dim != hidden. Skip rather than corrupt.
-        return
+    # Direction must be in the ROW (output) space of W (W[out, in]; we
+    # subtract d (d^T W)). The old check compared against shape[1] (input),
+    # which silently skipped every NON-SQUARE weight — mlp.down_proj was
+    # never ablated in any stacked/advanced run. Raise loudly instead.
+    if d.shape[0] != weight.shape[0]:
+        raise RuntimeError(
+            f"EXCISE: refusal direction is in output space {d.shape[0]} but "
+            f"weight {tuple(weight.shape)} has output dim {weight.shape[0]}. "
+            f"Hidden-space directions only fit square weights (o_proj/q/k/v); "
+            f"for mlp.down_proj W[hidden, inter] pass an inter-space direction."
+        )
     try:
+        # NOTE ON alpha SEMANTICS (fix 2026-09-02): the plain row projection
+        # w' = w - alpha*d*(d^T w) only NULLS the refusal component at
+        # alpha=1. For alpha > 2 the subtracted term exceeds the component,
+        # so |w'| GROWS (measured +8-14% at alpha=10) — the refusal
+        # direction is inverted and amplified, not removed. The previous
+        # runs used alpha=4/10 expecting "stronger removal" and got the
+        # opposite. The MPOA variant rescales the norm afterward, so high
+        # alpha is tolerable THERE (it acts as a soft clamp on how much of
+        # the component is removed). For plain advanced projection, alpha=1
+        # is full orthogonal nulling; keep alpha in [0.5, 1.5] for sane
+        # partial removal.
         weight.sub_(alpha * torch.einsum("i,j->ij", d, d @ weight))
     except RuntimeError as exc:
         if "quantized" in str(exc).lower() or "bitsandbytes" in str(exc).lower():
@@ -144,8 +162,20 @@ def _project_2d_mpoa(weight: torch.Tensor, d: torch.Tensor, alpha: float) -> Non
     if d.dim() > 1:
         # batch dims from probe hooks must be squeezed — else silent no-op
         d = d.reshape(-1)
-    if d.shape[0] != weight.shape[1]:
-        return
+    # Direction space must match the ROW (output) space, not the column
+    # (input) space: W[out, in], d[out], and we subtract d (d^T W).
+    # For non-square weights (e.g. mlp.down_proj W[hidden, inter]) a
+    # hidden-space direction CANNOT be applied — the caller must pass an
+    # inter-space direction instead. Silent-skip here hid that: down_proj
+    # was NEVER ablated in stacked runs. Log + raise loudly instead.
+    if d.shape[0] != weight.shape[0]:
+        raise RuntimeError(
+            f"EXCISE: refusal direction is in output space {d.shape[0]} but "
+            f"weight {tuple(weight.shape)} has output dim {weight.shape[0]}. "
+            f"A hidden-space direction cannot be projected onto a non-square "
+            f"weight (e.g. mlp.down_proj W[hidden, inter]); pass an inter-space "
+            f"direction (or ablate a square weight like o_proj)."
+        )
     try:
         orig_norm = weight.norm().clamp(min=1e-8)
         weight.sub_(alpha * torch.einsum("i,j->ij", d, d @ weight))

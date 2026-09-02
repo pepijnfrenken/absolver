@@ -188,8 +188,10 @@ def gate_perplexity_increase(
         inp = tok(formatted, return_tensors="pt", truncation=True).to(dev)
         with torch.no_grad():
             out = model(**inp)
-        # per-token logprob of the continuation (prompt tokens excluded)
-        cont = out.logits[0, inp["input_ids"].shape[1] - 1: -1]
+        # per-token logprob of the continuation (prompt tokens excluded).
+        # Same empty-slice trap as verify.py: [N-1 : -1] is empty — end the
+        # slice at the last logit position (lg.shape[1]-1).
+        cont = out.logits[0, inp["input_ids"].shape[1] - 1: out.logits.shape[1] - 1]
         logp = torch.log_softmax(cont.float(), dim=-1)
         tokens = inp["input_ids"][0, 1:]
         chosen = logp.gather(-1, tokens.unsqueeze(-1)).squeeze(-1)

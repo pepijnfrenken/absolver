@@ -382,14 +382,16 @@ def _apply_direct_ablation(model: Any, layers_mod, directions: dict, candidate: 
         for wname in candidate["target_weights"]:
             if wname == "o_proj" and hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
                 w = layer.self_attn.o_proj.weight
-                if w.dim() == 2 and d.shape[0] == w.shape[1]:
+                # projection is OUTPUT-space (row) — d must match W.shape[0].
+                # (old guard checked shape[1], silently skipping down_proj etc.)
+                if w.dim() == 2 and d.shape[0] == w.shape[0]:
                     d_w = d.to(device=w.device, dtype=w.dtype)
                     w.data.sub_(candidate["alpha"] * d_w.unsqueeze(1) @ (d_w @ w).unsqueeze(0))
             elif wname == "down_proj":
                 ff = getattr(layer, "mlp", None) or getattr(layer, "feed_forward", None)
                 if ff is not None and hasattr(ff, "down_proj"):
                     w = ff.down_proj.weight
-                    if w.dim() == 2 and d.shape[0] == w.shape[1]:
+                    if w.dim() == 2 and d.shape[0] == w.shape[0]:
                         d_w = d.to(device=w.device, dtype=w.dtype)
                         w.data.sub_(candidate["alpha"] * d_w.unsqueeze(1) @ (d_w @ w).unsqueeze(0))
 
