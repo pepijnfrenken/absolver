@@ -64,13 +64,31 @@ An ablation is only "done" when:
 ## Usage
 
 ```bash
-# Full pipeline (Modal, L4 GPU)
-modal run run_absolver_modal.py --config-path models/qwen2.5-1.5b-instruct.yaml
+# --- Guided harness (inspect first, decide ONE config, apply, collect) ---
+# Inspect a model: arch, silent-skip landmines (non-square/bias-less), layer profile
+python harness/abl.py inspect models/qwen2.5-1.5b-instruct.yaml
+# Collect + save per-layer directions
+python harness/abl.py directions models/qwen2.5-1.5b-instruct.yaml
+# Apply ONE config to a fresh model (no auto-retry — you decide)
+python harness/abl.py abl models/qwen2.5-1.5b-instruct.yaml \
+    --method mpoa --alpha 10 --layers 24-27 --weights o_proj,down_proj
+# Measure with the gates, write a JSON bundle to campaigns/<model>/
+python harness/abl.py collect models/qwen2.5-1.5b-instruct.yaml --model-dir campaigns/...
+# See the campaign library
+python harness/abl.py list-campaigns
 
-# Gates-only sanity check on a model (pristine or ablated)
-modal run run_gates_modal.py                # pristine
-modal run run_gates_modal.py --ablated      # apply diag config + gates
+# --- Legacy full auto-pipeline (deprecated; see History) ---
+modal run run_absolver_modal.py --config-path models/qwen2.5-1.5b-instruct.yaml
 ```
+
+## Campaign KB (the compounding library)
+
+Every attempt to abliterate a model is a **campaign**: `campaigns/<model>/README.md`
+with machine-readable YAML frontmatter (method, alpha, results, bugs found) +
+a full honest narrative (false starts, causal tests, what the next campaign
+should try). The goal: each model is easier than the last because the
+campaigns accumulate. See `campaigns/README.md` and
+`campaigns/templates/campaign-template.md`.
 
 ## Model configs
 
@@ -80,6 +98,14 @@ modal run run_gates_modal.py --ablated      # apply diag config + gates
 
 ## History
 
+- **2026-09-02** — Toolkit pivot. The full-auto sweep loop was retired as
+  the main path: it hid 6 silent bugs (down_proj never ablated, alpha>2
+  sign-flip amplifier, PPL empty slice, bias_vectors no-op on bias-less
+  models, prompt-leak scorer, train=0 split). Added the guided harness
+  (`harness/abl.py`), the campaign KB (`campaigns/`), and the Qwen2.5
+  NEGATIVE campaign as the first entry. Honest verdict on Qwen2.5-1.5B:
+  refusal direction is causal (steering −20·d flips it) but no single-shot
+  weight config passes the gates.
 - **2026-09-01** — fixed the silent no-op bug (3D activation stack → shape
   guard skipped the projection). Ported E03 gates + held-out split. Built
   gates into the loop: stacked_ablation method, gate-driven routing,
