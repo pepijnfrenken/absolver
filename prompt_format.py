@@ -66,6 +66,31 @@ def detect_prompt_format(tok: Any, override: str | None = None) -> str:
     return "raw"
 
 
+def resolve_flavor(tok: Any, requested: str | None, default: str = "chat") -> str:
+    """Resolve the effective prompt flavor ('raw'|'chat') for a tokenizer.
+
+    ``requested`` is a CLI ``--prompt-flavor`` value (or None); ``default``
+    is the config's ``prompt_flavor``. Returns 'chat' or 'raw'. A 'chat'
+    request on a tokenizer with NO chat template falls back to 'raw' (the
+    only flavor that exists there) rather than crashing every gate —
+    callers should print the fallback so the bundle stays honest.
+
+    This is the single flavor axis TOOLKIT-FEEDBACK §1b/§3.4 asks for:
+    directions, abl, gates and transcripts all honor the same value, so a
+    direction harvested from chat-formatted prompts targets exactly the
+    mechanism the chat-formatted gates measure.
+    """
+    f = (requested or default or "chat").lower()
+    if f not in ("raw", "chat"):
+        raise ValueError(
+            f"prompt flavor must be 'raw' or 'chat', got {f!r}; "
+            "set via --prompt-flavor or config prompt_flavor"
+        )
+    if f == "chat" and not _has_chat_template(tok):
+        return "raw"
+    return f
+
+
 def format_prompt(tok: Any, prompt: str, fmt: str = "auto") -> str:
     """Format a single user prompt for generation with the given tokenizer.
 

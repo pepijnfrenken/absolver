@@ -298,6 +298,14 @@ class ModelConfig(BaseModel):
     prompt_format: str = "auto"
     """How to format prompts for generation: auto/chat/raw/thinking.
     Auto detects from the tokenizer (chat template, thinking tokens)."""
+    prompt_flavor: str = "chat"
+    """Prompt flavor shared by directions, abl, gates and transcripts:
+    'chat' = chat-template formatted (default — gates evaluate
+    chat-templated prompts, so directions must target the same
+    mechanism), 'raw' = unformatted prompt strings. TOOLKIT-FEEDBACK
+    §1b/§3.4: the raw-vs-chat mismatch (directions harvested raw, gates
+    evaluated chat) made the LFM2.5 known-good recipe fail without any
+    obvious cause; one flag now controls the flavor everywhere."""
 
     # ------------------------------------------------------------------ #
     # Reflexion (KB-grounded strategy retry)

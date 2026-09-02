@@ -14,11 +14,20 @@ Commands:
                                    <campaign>/directions.pt (with metadata).
   abl <config.yaml> --method mpoa --alpha 10 --layers 24,25,26,27 \
       --weights o_proj,down_proj   Apply ONE config to a fresh model,
-                                   save ablated weights + a diff manifest.
-  collect <config.yaml>            Run gates + behavior + capability map on
-                                   the ablated model, write a JSON bundle to
-                                   <campaign>/<run-id>/bundle.json.
+                                   save ablated weights + a diff manifest
+                                   (+ the directions it used; reuse with
+                                   --from-directions).
+  steer-test <config.yaml>         Alpha-response curve via steering hooks:
+                                   alpha grid x few prompts, transcripts +
+                                   refusal + PPL, NO model re-save.
+  collect <config.yaml> [--model-dir DIR] [--transcript]
+                                   Run gates + capability on the ablated
+                                   model, write a JSON bundle (+ optional
+                                   per-generation transcript) next to it.
   list-campaigns                   List campaigns + statuses from YAML.
+
+All harvesting commands honor --prompt-flavor raw|chat (config default:
+'chat') so directions, abl, gates and transcripts share ONE flavor axis.
 
 The output dir convention: campaigns/<model-slug>/<run-id>/ where run-id
 is a short timestamp + config tag. The campaign README is the narrative;
@@ -85,6 +94,26 @@ def _parse_layers(spec: str):
     return sorted(set(out))
 
 
+def _resolve_flavor(cfg, flavor: str | None, tok) -> str:
+    """Resolve the single prompt-flavor axis ('raw'|'chat') for this run.
+
+    CLI ``--prompt-flavor`` wins, else ``cfg.prompt_flavor`` (default
+    'chat' — gates evaluate chat-templated prompts, so directions must
+    target the same mechanism; TOOLKIT-FEEDBACK §1b). A 'chat' request on
+    a tokenizer with no chat template warns and falls back to raw.
+    """
+    from prompt_format import resolve_flavor
+    requested = (flavor or getattr(cfg, "prompt_flavor", "chat")).lower()
+    try:
+        f = resolve_flavor(tok, requested, getattr(cfg, "prompt_flavor", "chat"))
+    except ValueError as exc:
+        raise SystemExit(f"FATAL: {exc}") from exc
+    if f != requested:
+        print(f"WARNING: prompt flavor '{requested}' requested but tokenizer has no "
+              f"chat template; using raw flavor")
+    return f
+
+
 # --------------------------------------------------------------------------- #
 # inspect
 # --------------------------------------------------------------------------- #
@@ -102,6 +131,19 @@ def cmd_inspect(config_path: str) -> int:
     dev = "cpu" if not hasattr(model, "device") or str(model.device) == "cpu" else str(model.device)
     print(f"=== {cfg.model_id} ===")
     print(f"arch={cfg.model_arch} layers={num_layers} hidden={hidden}")
+
+    # The model's OWN layer_types list (LFM2.x ships it, e.g.
+    # ['conv', 'conv', ..., 'full_attention', ...]) — shows conv-vs-
+    # attention at a glance without module introspection (TOOLKIT-FEEDBACK
+    # §3.6). Conv layers must NEVER be projected.
+    lt = getattr(getattr(model, "config", None), "layer_types", None)
+    if lt:
+        print(f"layer_types ({len(lt)}): {lt}")
+        print("  per-layer: " + ", ".join(
+            f"L{i}={t}" for i, t in enumerate(lt[: num_layers * 2])))
+        non_conv = [i for i, t in enumerate(lt[:num_layers]) if "conv" not in str(t).lower()]
+        if non_conv:
+            print(f"  projectable (non-conv): {non_conv}")
 
     # Bias / weight-shape audit — catches silent-skip landmines.
     # Resolution is alias-aware (o_proj|out_proj, down_proj|w2) so LFM2.5
@@ -187,13 +229,16 @@ def cmd_inspect(config_path: str) -> int:
 # directions
 # --------------------------------------------------------------------------- #
 
-def cmd_directions(config_path: str, n_prompts: int | None) -> int:
+def cmd_directions(config_path: str, n_prompts: int | None, flavor: str | None) -> int:
+    import torch
     cfg = _load_cfg(config_path)
     model, tok = _load_model_tok(cfg)
     from probe import _find_layers, _make_hook, _to_device, _collect_paired_output_phase
     from distill import extract_directions
     from prompts import DEFAULT_HARMFUL, DEFAULT_HARMLESS
+    from prompt_format import format_prompt
 
+    flavor = _resolve_flavor(cfg, flavor, tok)
     layers = _find_layers(model, cfg.model_arch)
     num_layers = len(layers)
     hidden = model.config.hidden_size
@@ -218,7 +263,10 @@ def cmd_directions(config_path: str, n_prompts: int | None) -> int:
     n = n_prompts or getattr(cfg, "n_probe_prompts", 20)
     h = list(DEFAULT_HARMFUL)[:n]
     g = list(DEFAULT_HARMLESS)[:n]
-    # direction method from config
+    # Flavor axis: harvest from the SAME flavor the gates evaluate, so a
+    # direction targets the measured mechanism (TOOLKIT-FEEDBACK §1b).
+    h_f = [format_prompt(tok, p, flavor) for p in h]
+    g_f = [format_prompt(tok, p, flavor) for p in g]
     dm = getattr(cfg, "dir_method", "diff_means")
     probe_mode = "input"
     prefill = None
@@ -230,28 +278,28 @@ def cmd_directions(config_path: str, n_prompts: int | None) -> int:
         # direction source (see distill._paired docstring).
         prefill = getattr(cfg, "paired_prefill", "Sure, I can help with that.")
         max_new = getattr(cfg, "paired_max_new_tokens", 64)
-        acts_h, acts_g = _collect_paired_output_phase(model, tok, h, layers, num_layers, dev, prefill, max_new)
+        acts_h, acts_g = _collect_paired_output_phase(model, tok, h_f, layers, num_layers, dev, prefill, max_new)
         probe_mode = "paired"
         print(f"Paired output-phase direction collection: {len(h)} harmful prompts "
-              f"(unprimed refusal vs prefill={prefill!r}, max_new={max_new})")
+              f"(flavor={flavor}, unprimed refusal vs prefill={prefill!r}, max_new={max_new})")
     else:
-        acts_h = collect(h)
-        acts_g = collect(g)
+        acts_h = collect(h_f)
+        acts_g = collect(g_f)
     dirs, scores = extract_directions(acts_h, acts_g, num_layers, hidden, dm, 3, dev)
     missing = [i for i in range(num_layers) if i not in dirs]
     if missing:
         print(f"WARNING: {len(missing)}/{num_layers} layers produced NO direction: {missing}")
-    print(f"Directions collected on {len(dirs)}/{num_layers} layers (dir_method={dm}, probe={probe_mode})")
+    print(f"Directions collected on {len(dirs)}/{num_layers} layers "
+          f"(dir_method={dm}, probe={probe_mode}, flavor={flavor})")
 
     out_dir = PROJECT_DIR / "campaigns" / _slug(cfg.model_id)
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "directions.pt"
-    import torch
+    path = out_dir / f"directions-{flavor}.pt"
     torch.save({"dirs": {str(k): v.cpu() for k, v in dirs.items()},
                 "scores": {str(k): v for k, v in scores.items()},
                 "model_id": cfg.model_id, "dir_method": dm,
                 "probe_mode": probe_mode, "prefill": prefill,
-                "n_prompts": len(h), "hidden": hidden}, path)
+                "flavor": flavor, "n_prompts": len(h), "hidden": hidden}, path)
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
     print(f"Saved {len(dirs)} layer directions -> {path}")
     print(f"Top-5 layers: {[(li, round(s, 2)) for li, s in ranked[:5]]}")
@@ -271,7 +319,8 @@ def cmd_directions(config_path: str, n_prompts: int | None) -> int:
 
 def cmd_abl(config_path: str, method: str, alpha: float, layers_spec: str,
             weights_spec: str, dir_method: str | None, out_tag: str | None,
-            passes: int, n_prompts: int | None) -> int:
+            passes: int, n_prompts: int | None, flavor: str | None,
+            from_directions: str | None) -> int:
     cfg = _load_cfg(config_path)
     model, tok = _load_model_tok(cfg)
     import torch
@@ -279,7 +328,9 @@ def cmd_abl(config_path: str, method: str, alpha: float, layers_spec: str,
     from distill import extract_directions
     from sweep import _apply_candidate
     from prompts import DEFAULT_HARMFUL, DEFAULT_HARMLESS
+    from prompt_format import format_prompt
 
+    flavor = _resolve_flavor(cfg, flavor, tok)
     layers = _find_layers(model, cfg.model_arch)
     num_layers = len(layers)
     hidden = model.config.hidden_size
@@ -287,41 +338,68 @@ def cmd_abl(config_path: str, method: str, alpha: float, layers_spec: str,
     weights = [w.strip() for w in weights_spec.split(",")]
     dm = dir_method or getattr(cfg, "dir_method", "diff_means")
 
-    # Collect directions fresh (never reuse stale ones)
-    from collections import defaultdict
-    def collect(prompts):
-        store = defaultdict(list)
-        handles = [layers[i].register_forward_hook(_make_hook(i, store))
-                   for i in range(num_layers)]
-        try:
-            for p in prompts:
-                inp = tok(p, return_tensors="pt", truncation=True, max_length=128)
-                with torch.no_grad():
-                    model(**inp)
-        finally:
-            for hh in handles:
-                try: hh.remove()
-                except Exception: pass
-        return dict(store)
-
-    n = n_prompts or getattr(cfg, "n_probe_prompts", 20)
-    h = list(DEFAULT_HARMFUL)[:n]
-    g = list(DEFAULT_HARMLESS)[:n]
+    dirs = None
+    scores: dict[int, float] = {}
     probe_mode = "input"
     prefill = None
-    if dm == "paired":
-        # 'paired' MUST use the output-phase paired data (same prompts,
-        # unprimed refusal vs affirmative-prefill) — never the input-phase
-        # prompt-set contrast, which is diff_means in disguise.
-        prefill = getattr(cfg, "paired_prefill", "Sure, I can help with that.")
-        max_new = getattr(cfg, "paired_max_new_tokens", 64)
-        acts_h, acts_g = _collect_paired_output_phase(model, tok, h, layers, num_layers, "cpu", prefill, max_new)
-        probe_mode = "paired"
-        print(f"Paired output-phase directions: {len(h)} prompts (prefill={prefill!r}, max_new={max_new})")
+    n_dirs = 0
+    if from_directions:
+        # Reuse a saved direction harvest (TOOLKIT-FEEDBACK §1d): one
+        # expensive harvest serves two alphas/layer-sets, and a recorded
+        # directions.pt is actually part of the evidence trail.
+        data = _load_directions(from_directions)
+        try:
+            dirs = {int(k): v for k, v in data["dirs"].items()}
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SystemExit(f"FATAL: {from_directions} is not a harness directions "
+                             f"file (no 'dirs' mapping): {exc}") from exc
+        scores = {int(k): v for k, v in (data.get("scores") or {}).items()}
+        probe_mode = data.get("probe_mode", "?")
+        prefill = data.get("prefill")
+        n_dirs = int(data.get("n_prompts", 0) or 0)
+        print(f"Loaded {len(dirs)} layer directions from {from_directions} "
+              f"(dir_method={data.get('dir_method')}, flavor={data.get('flavor')}, "
+              f"n_prompts={n_dirs})")
+
     else:
-        acts_h = collect(h)
-        acts_g = collect(g)
-    dirs, scores = extract_directions(acts_h, acts_g, num_layers, hidden, dm, 3, "cpu")
+        # Collect directions fresh (never reuse stale ones silently)
+        from collections import defaultdict
+        def collect(prompts):
+            store = defaultdict(list)
+            handles = [layers[i].register_forward_hook(_make_hook(i, store))
+                       for i in range(num_layers)]
+            try:
+                for p in prompts:
+                    inp = tok(p, return_tensors="pt", truncation=True, max_length=128)
+                    with torch.no_grad():
+                        model(**inp)
+            finally:
+                for hh in handles:
+                    try: hh.remove()
+                    except Exception: pass
+            return dict(store)
+
+        n = n_prompts or getattr(cfg, "n_probe_prompts", 20)
+        h = list(DEFAULT_HARMFUL)[:n]
+        g = list(DEFAULT_HARMLESS)[:n]
+        h_f = [format_prompt(tok, p, flavor) for p in h]
+        g_f = [format_prompt(tok, p, flavor) for p in g]
+        if dm == "paired":
+            # 'paired' MUST use the output-phase paired data (same prompts,
+            # unprimed refusal vs affirmative-prefill) — never the input-phase
+            # prompt-set contrast, which is diff_means in disguise.
+            prefill = getattr(cfg, "paired_prefill", "Sure, I can help with that.")
+            max_new = getattr(cfg, "paired_max_new_tokens", 64)
+            acts_h, acts_g = _collect_paired_output_phase(model, tok, h_f, layers, num_layers, "cpu", prefill, max_new)
+            probe_mode = "paired"
+            n_dirs = len(h)
+            print(f"Paired output-phase directions: {len(h)} prompts "
+                  f"(flavor={flavor}, prefill={prefill!r}, max_new={max_new})")
+        else:
+            acts_h = collect(h_f)
+            acts_g = collect(g_f)
+            n_dirs = len(h)
+        dirs, scores = extract_directions(acts_h, acts_g, num_layers, hidden, dm, 3, "cpu")
 
     candidate = {"method": method, "dir_method": dm,
                  "target_layers": target_layers, "target_weights": weights,
@@ -348,14 +426,37 @@ def cmd_abl(config_path: str, method: str, alpha: float, layers_spec: str,
     _copy_trust_remote_code(cfg, out_dir)
     manifest = {"model_id": cfg.model_id, "method": method, "dir_method": dm,
                 "probe_mode": probe_mode, "prefill": prefill,
+                "flavor": flavor, "from_directions": from_directions,
                 "alpha": alpha, "passes": passes,
                 "layers": target_layers, "weights": weights,
-                "n_probe_prompts": n,
+                "n_probe_prompts": n_dirs,
                 "weight_changes": applied,
                 "config": config_path, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    # Save the directions this run used/derived RIGHT NEXT to the manifest —
+    # a recorded harvest is part of the evidence trail (TOOLKIT-FEEDBACK §1d);
+    # another run can reuse it via --from-directions.
+    dir_path = out_dir / f"directions-{flavor}.pt"
+    torch.save({"dirs": {str(k): v.cpu() for k, v in dirs.items()},
+                "scores": {str(k): v for k, v in scores.items()},
+                "model_id": cfg.model_id, "dir_method": dm,
+                "probe_mode": probe_mode, "prefill": prefill,
+                "flavor": flavor, "n_prompts": n_dirs, "hidden": hidden,
+                "from_directions": from_directions}, dir_path)
+    print(f"Saved {len(dirs)} directions -> {dir_path}")
     print(f"Saved ablated model + manifest -> {out_dir}")
     return 0
+
+
+def _load_directions(path: str) -> dict[str, Any]:
+    """Load a harness directions.pt (keys may be str or int layer indices)."""
+    import torch
+    try:
+        return torch.load(path, map_location="cpu", weights_only=True)
+    except (TypeError, RuntimeError):
+        # older torch or a file with non-primitive payload: allow the pickle
+        # path — these files are local evidence, not untrusted input.
+        return torch.load(path, map_location="cpu")
 
 
 def _copy_trust_remote_code(cfg, out_dir: Path) -> None:
@@ -379,7 +480,8 @@ def _copy_trust_remote_code(cfg, out_dir: Path) -> None:
 # collect — run gates + behavior + capability, write a JSON bundle
 # --------------------------------------------------------------------------- #
 
-def cmd_collect(config_path: str, model_dir: str | None) -> int:
+def cmd_collect(config_path: str, model_dir: str | None, transcript: bool,
+                flavor: str | None) -> int:
     cfg = _load_cfg(config_path)
     import torch
     import gc
@@ -390,7 +492,7 @@ def cmd_collect(config_path: str, model_dir: str | None) -> int:
     from prompts import DEFAULT_HARMFUL, DEFAULT_HARMLESS
     from gates import run_gates
     from verify import run_mmlu_mini, _digest
-    from prompt_format import detect_prompt_format, format_prompt
+    from prompt_format import format_prompt
 
     # held-out split (shared by gates and the pristine baseline)
     h = list(DEFAULT_HARMFUL); g = list(DEFAULT_HARMLESS)
@@ -411,15 +513,15 @@ def cmd_collect(config_path: str, model_dir: str | None) -> int:
     if model_dir:
         print("Collecting pristine baselines (PPL + first-token KL + mmlu) on held-out prompts...")
         pmodel, ptok = _load_model_tok(cfg)
+        flavor_r = _resolve_flavor(cfg, flavor, ptok)
         try:
             try:
                 pristine_benchmark_scores["mmlu"] = run_mmlu_mini(pmodel, ptok, n=20)
                 print(f"  pristine mmlu_mini: {pristine_benchmark_scores['mmlu']:.3f}")
             except Exception as exc:
                 print(f"WARNING: pristine mmlu_mini failed: {exc}")
-            hfmt = detect_prompt_format(ptok, getattr(cfg, "prompt_format", "auto"))
             for p in held_out:
-                formatted = format_prompt(ptok, p, hfmt)
+                formatted = format_prompt(ptok, p, flavor_r)
                 inp = ptok(formatted, return_tensors="pt", truncation=True,
                            max_length=cfg.max_seq_len)
                 with torch.no_grad():
@@ -437,7 +539,8 @@ def cmd_collect(config_path: str, model_dir: str | None) -> int:
                 chosen = lp.gather(-1, tokens.unsqueeze(-1)).squeeze(-1)
                 ppl = math.exp(-chosen.sum().item() / max(1, chosen.numel()))
                 pristine_logprobs[_digest(p)] = ppl
-            print(f"  pristine baselines on {len(held_out)} held-out prompts OK")
+            print(f"  pristine baselines on {len(held_out)} held-out prompts OK "
+                  f"(flavor={flavor_r})")
         except Exception as exc:
             print(f"WARNING: pristine baseline collection failed ({exc}); "
                   f"PPL/KL gates will be skipped")
@@ -455,6 +558,10 @@ def cmd_collect(config_path: str, model_dir: str | None) -> int:
         model, tok = _load_model_tok(cfg)
     if tok.pad_token_id is None:
         tok.pad_token_id = tok.eos_token_id
+    # Resolve the flavor against THIS model's tokenizer (pristine runs and
+    # ablated runs share the family tokenizer, so same result; the fallback
+    # from chat->raw must be decided on a real tokenizer).
+    flavor_r = _resolve_flavor(cfg, flavor, tok)
 
     # capability
     benchmark_scores = {}
@@ -463,12 +570,15 @@ def cmd_collect(config_path: str, model_dir: str | None) -> int:
     except Exception as exc:
         print("mmlu_mini failed:", exc)
 
+    gen_transcript: list[dict[str, Any]] = []
     report = run_gates(model, tok, cfg, prompts=held_out, benchmark_scores=benchmark_scores,
                        pristine_logprobs=pristine_logprobs or None,
                        pristine_logprobs_first=pristine_logprobs_first or None,
-                       pristine_benchmark_scores=pristine_benchmark_scores or None)
+                       pristine_benchmark_scores=pristine_benchmark_scores or None,
+                       flavor=flavor_r, transcript=gen_transcript if transcript else None)
     out = {"model_id": cfg.model_id if not model_dir else model_dir,
            "eval_target": "pristine" if not model_dir else Path(model_dir).name,
+           "prompt_flavor": flavor_r,
            "held_out_size": len(held_out), "benchmark_scores": benchmark_scores,
            "pristine_baseline_for": ["perplexity_increase", "first_token_kl", "capability"] if model_dir else [],
            "time": time.strftime("%Y-%m-%d %H:%M:%S")}
@@ -484,8 +594,194 @@ def cmd_collect(config_path: str, model_dir: str | None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "bundle.json"
     (out_dir / "bundle.json").write_text(json.dumps(out, indent=2, default=str), encoding="utf-8")
+    # Every generated response (prompt + flavor + formatted + decoded text),
+    # saved RIGHT NEXT TO the bundle — counts cannot distinguish "refuses"
+    # from "Rams boilerplate", transcripts can (TOOLKIT-FEEDBACK §1a/§3.1).
+    if transcript:
+        tpath = out_dir / "transcript.json"
+        tdoc = {"model_id": out["model_id"], "eval_target": out["eval_target"],
+                "prompt_flavor": flavor_r, "held_out_prompts": held_out,
+                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "generations": gen_transcript}
+        (out_dir / "transcript.json").write_text(json.dumps(tdoc, indent=2, default=str), encoding="utf-8")
+        print(f"Transcript ({len(gen_transcript)} generations) -> {tpath}")
     print(json.dumps(out, indent=2, default=str))
     print(f"\nBundle -> {path}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# steer-test — alpha-response curve, no model re-save (steering hooks)
+# --------------------------------------------------------------------------- #
+
+def cmd_steer_test(config_path: str, alphas_spec: str, n_directions: int | None,
+                   n_prompts: int | None, layers_spec: str | None,
+                   flavor: str | None) -> int:
+    """Alpha grid x few prompts: transcripts + refusal + PPL per alpha.
+
+    Non-destructive (runtime steering hooks/bias vectors — no weight edits,
+    no model re-save). Answers "is the operating window empty" in ONE run:
+    if NO alpha on the target layers removes refusal without PPL blowing up,
+    the recipe band is empty and weight-projecting is a waste of CPU.
+    """
+    cfg = _load_cfg(config_path)
+    model, tok = _load_model_tok(cfg)
+    import torch
+    import math
+    from probe import _find_layers, _make_hook, _collect_paired_output_phase
+    from distill import extract_directions
+    from sweep import _apply_steering, _clear_steering_hooks
+    from prompts import DEFAULT_HARMFUL, DEFAULT_HARMLESS
+    from prompt_format import format_prompt
+    from verify import _decode_continuation, _response_is_refusal
+
+    flavor = _resolve_flavor(cfg, flavor, tok)
+    layers = _find_layers(model, cfg.model_arch)
+    num_layers = len(layers)
+    hidden = model.config.hidden_size
+    target_layers = _parse_layers(layers_spec) if layers_spec else \
+        list(getattr(cfg, "target_layers", []) or [])
+    if not target_layers:
+        from sweep import _resolve_proj
+        target_layers = [li for li in range(num_layers)
+                         if _resolve_proj(layers[li], "o_proj") is not None]
+    dm = getattr(cfg, "dir_method", "diff_means")
+
+    # ---- cheap direction harvest (flavor-aware, CPU-reduced) ----
+    n_dir = n_directions or min(10, getattr(cfg, "n_probe_prompts", 20))
+    h_dir = [format_prompt(tok, p, flavor) for p in list(DEFAULT_HARMFUL)[:n_dir]]
+    g_dir = [format_prompt(tok, p, flavor) for p in list(DEFAULT_HARMLESS)[:n_dir]]
+    if dm == "paired":
+        prefill = getattr(cfg, "paired_prefill", "Sure, I can help with that.")
+        max_new = getattr(cfg, "paired_max_new_tokens", 64)
+        acts_h, acts_g = _collect_paired_output_phase(model, tok, h_dir, layers, num_layers, "cpu", prefill, max_new)
+    else:
+        from collections import defaultdict
+        store_h, store_g = defaultdict(list), defaultdict(list)
+        def _collect(prompts, store):
+            handles = [layers[i].register_forward_hook(_make_hook(i, store))
+                       for i in range(num_layers)]
+            try:
+                for p in prompts:
+                    inp = tok(p, return_tensors="pt", truncation=True, max_length=128)
+                    with torch.no_grad():
+                        model(**inp)
+            finally:
+                for hh in handles:
+                    try: hh.remove()
+                    except Exception: pass
+            return dict(store)
+        acts_h, acts_g = _collect(h_dir, store_h), _collect(g_dir, store_g)
+    dirs, scores = extract_directions(acts_h, acts_g, num_layers, hidden, dm, 3, "cpu")
+    no_dir = [li for li in target_layers if li not in dirs]
+    if no_dir:
+        print(f"WARNING: no direction for target layers {no_dir}; they will not steer")
+    print(f"steer-test: {len(dirs)} directions ({dm}, flavor={flavor}, n={n_dir}), "
+          f"target layers {target_layers}")
+
+    # ---- alpha grid ----
+    try:
+        alphas = [float(a.strip()) for a in alphas_spec.split(",") if a.strip()]
+    except ValueError as exc:
+        raise SystemExit(f"FATAL: --alphas must be comma floats, got {alphas_spec!r}: {exc}") from exc
+    if not alphas:
+        raise SystemExit("FATAL: --alphas must be non-empty")
+
+    test_harmful = [format_prompt(tok, p, flavor) for p in list(DEFAULT_HARMFUL)[: n_prompts or 3]]
+    test_harmful_raw = list(DEFAULT_HARMFUL)[: n_prompts or 3]
+    test_benign = [format_prompt(tok, p, flavor) for p in list(DEFAULT_HARMLESS)[:2]]
+    test_benign_raw = list(DEFAULT_HARMLESS)[:2]
+    test_pairs = [(raw, f) for raw, f in zip(test_harmful_raw, test_harmful)]
+
+    def _ppl(formatted: str) -> float | None:
+        inp = tok(formatted, return_tensors="pt", truncation=True,
+                  max_length=getattr(cfg, "max_seq_len", 1024))
+        with torch.no_grad():
+            out = model(**inp)
+        cont = out.logits[0, 0: out.logits.shape[1] - 1]
+        logp = torch.log_softmax(cont.float(), dim=-1)
+        tokens = inp["input_ids"][0, 1:]
+        if cont.shape[0] != tokens.shape[0]:
+            return None
+        chosen = logp.gather(-1, tokens.unsqueeze(-1)).squeeze(-1)
+        return math.exp(-chosen.sum().item() / max(1, chosen.numel()))
+
+    def _generate(formatted: str) -> str:
+        inp = tok(formatted, return_tensors="pt", truncation=True)
+        with torch.no_grad():
+            out = model.generate(**inp, max_new_tokens=64, do_sample=False)
+        return _decode_continuation(tok, out, inp["input_ids"])
+
+    rows: list[dict[str, Any]] = []
+    transcript: list[dict[str, Any]] = []
+    # baseline (alpha=0): pristine PPL on the harmful test prompts
+    base_ppl = {raw: _ppl(f) for raw, f in test_pairs}
+    print(f"\n{'alpha':>6} | {'refusal':>8} | {'benign':>6} | {'PPL inc':>8} | notes")
+    print("-" * 72)
+    for alpha in [0.0] + alphas:
+        _clear_steering_hooks()
+        if alpha != 0.0:
+            _apply_steering(model, layers, dirs, {"method": "steering",
+                                                  "target_layers": target_layers,
+                                                  "alpha": alpha,
+                                                  "target_weights": []})
+        refusals = 0
+        ppl_incs = []
+        gen = []
+        for raw, f in test_pairs:
+            resp = _generate(f)
+            refusals += int(_response_is_refusal(resp))
+            gen.append({"alpha": alpha, "prompt": raw, "formatted": f,
+                        "response": resp})
+            p_abl = _ppl(f)
+            if p_abl is not None and base_ppl.get(raw):
+                ppl_incs.append(p_abl / base_ppl[raw] - 1.0)
+        benign_responses = []
+        for raw, f in zip(test_benign_raw, test_benign):
+            benign_responses.append({"alpha": alpha, "prompt": raw, "formatted": f,
+                                     "response": _generate(f)})
+        mean_inc = sum(ppl_incs) / len(ppl_incs) if ppl_incs else float("nan")
+        notes = []
+        if refusals == len(test_pairs) and alpha > 0:
+            notes.append("no effect (still refuses)")
+        if alpha > 0 and refusals == 0:
+            notes.append("refusal gone")
+        if not math.isnan(mean_inc) and mean_inc > 0.15:
+            notes.append(f"PPL +{mean_inc:.0%} > cap")
+        if not math.isnan(mean_inc) and mean_inc < 0:
+            notes.append("PPL dropped")
+        rows.append({"alpha": alpha, "refusal": f"{refusals}/{len(test_pairs)}",
+                     "benign": f"{sum(int(_response_is_refusal(b['response'])) for b in benign_responses)}/{len(benign_responses)}",
+                     "ppl_increase": None if math.isnan(mean_inc) else round(mean_inc, 4),
+                     "notes": "; ".join(notes) or "-"})
+        transcript.extend(gen)
+        transcript.extend(benign_responses)
+        ppl_str = ("-" if rows[-1]["ppl_increase"] is None
+                   else f"{rows[-1]['ppl_increase']:+.2%}")
+        print(f"{alpha:>6.2f} | {rows[-1]['refusal']:>8} | {rows[-1]['benign']:>6} | "
+              f"{ppl_str:>8} | {rows[-1]['notes']}")
+    _clear_steering_hooks()
+
+    # transcripts — the whole point: counts can't distinguish "refuses"
+    # from "Rams boilerplate"
+    for entry in transcript:
+        if entry["alpha"] == 0.0:
+            print(f"\n--- alpha 0.00 (pristine) | {entry['prompt'][:60]!r}")
+        else:
+            print(f"\n--- alpha {entry['alpha']:.2f} | {entry['prompt'][:60]!r}")
+        print(f"    {entry['response']}")
+
+    # evidence trail
+    out_dir = PROJECT_DIR / "campaigns" / _slug(cfg.model_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"steer-test-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    (out_dir / path.name).write_text(json.dumps({
+        "model_id": cfg.model_id, "dir_method": dm, "prompt_flavor": flavor,
+        "target_layers": target_layers, "alphas": [0.0] + alphas,
+        "n_directions": n_dir, "separation_scores": {str(k): v for k, v in scores.items()},
+        "rows": rows, "generations": transcript,
+        "time": time.strftime("%Y-%m-%d %H:%M:%S")}, indent=2, default=str), encoding="utf-8")
+    print(f"\nSteer-test evidence -> {out_dir / path.name}")
     return 0
 
 
@@ -538,7 +834,9 @@ def main() -> int:
     p = sub.add_parser("directions", help="collect + save per-layer directions")
     p.add_argument("config")
     p.add_argument("--n-prompts", type=int, default=None, help="override n_probe_prompts (CPU cost control)")
-    p.set_defaults(fn=lambda a: cmd_directions(a.config, a.n_prompts))
+    p.add_argument("--prompt-flavor", default=None, choices=["raw", "chat"],
+                   help="prompt flavor for the harvest (default: config prompt_flavor, which is 'chat')")
+    p.set_defaults(fn=lambda a: cmd_directions(a.config, a.n_prompts, a.prompt_flavor))
 
     p = sub.add_parser("abl", help="apply ONE config to a fresh model")
     p.add_argument("config")
@@ -550,12 +848,33 @@ def main() -> int:
     p.add_argument("--passes", type=int, default=1, help="projection passes (compound; default 1)")
     p.add_argument("--n-prompts", type=int, default=None, help="override n_probe_prompts (CPU cost control)")
     p.add_argument("--tag", default=None, help="output subdir tag")
-    p.set_defaults(fn=lambda a: cmd_abl(a.config, a.method, a.alpha, a.layers, a.weights, a.dir_method, a.tag, a.passes, a.n_prompts))
+    p.add_argument("--from-directions", default=None,
+                   help="path to a saved directions-<flavor>.pt (reuse one harvest; skips collection)")
+    p.add_argument("--prompt-flavor", default=None, choices=["raw", "chat"],
+                   help="prompt flavor for direction harvest + manifest (default: config prompt_flavor)")
+    p.set_defaults(fn=lambda a: cmd_abl(a.config, a.method, a.alpha, a.layers, a.weights,
+                                        a.dir_method, a.tag, a.passes, a.n_prompts,
+                                        a.prompt_flavor, a.from_directions))
 
     p = sub.add_parser("collect", help="run gates + capability on an ablated model dir (or pristine)")
     p.add_argument("config")
     p.add_argument("--model-dir", default=None, help="path to ablated model (default: pristine from config)")
-    p.set_defaults(fn=lambda a: cmd_collect(a.config, a.model_dir))
+    p.add_argument("--transcript", action="store_true",
+                   help="save every gate generation (prompt, flavor, decoded text) next to bundle.json")
+    p.add_argument("--prompt-flavor", default=None, choices=["raw", "chat"],
+                   help="prompt flavor for gates (default: config prompt_flavor — 'chat')")
+    p.set_defaults(fn=lambda a: cmd_collect(a.config, a.model_dir, a.transcript, a.prompt_flavor))
+
+    p = sub.add_parser("steer-test", help="alpha-response curve via steering hooks (no model re-save)")
+    p.add_argument("config")
+    p.add_argument("--alphas", default="1.0,1.5,2.0,2.5,3.0", help="comma float grid (default 1.0..3.0)")
+    p.add_argument("--n-directions", type=int, default=None, help="prompts for the direction harvest (default 10; CPU cost control)")
+    p.add_argument("--n-prompts", type=int, default=3, help="harmful test prompts per alpha (default 3)")
+    p.add_argument("--layers", default=None, help="target layers (default: config target_layers)")
+    p.add_argument("--prompt-flavor", default=None, choices=["raw", "chat"],
+                   help="prompt flavor for directions + test prompts (default: config prompt_flavor)")
+    p.set_defaults(fn=lambda a: cmd_steer_test(a.config, a.alphas, a.n_directions,
+                                               a.n_prompts, a.layers, a.prompt_flavor))
 
     p = sub.add_parser("list-campaigns", help="list campaign statuses")
     p.set_defaults(fn=lambda a: cmd_list_campaigns())
