@@ -190,7 +190,12 @@ def cmd_inspect(config_path: str) -> int:
         if ap is not None:
             bits.append(f"attn-out:{tuple(ap.weight.shape)}")
         elif conv is not None:
-            bits.append(f"CONV:{tuple(conv.weight.shape)}")
+            # conv blocks differ by arch: LFM2.5 exposes Conv1d as
+            # conv.conv.weight (3D) + in_proj/out_proj Linears.
+            cw = getattr(getattr(conv, "conv", None), "weight", None)
+            if cw is None:
+                cw = getattr(conv, "weight", None)
+            bits.append(f"CONV:{tuple(cw.shape)}" if cw is not None else f"CONV:{type(conv).__name__}")
         else:
             bits.append("no-attn-out")
         bits.append(f"mlp:{tuple(dp.weight.shape)}" if dp is not None else "mlp:MISSING")
