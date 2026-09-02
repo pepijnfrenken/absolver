@@ -297,10 +297,11 @@ def cmd_directions(config_path: str, n_prompts: int | None, flavor: str | None,
     from prompt_format import format_prompt
 
     flavor = _resolve_flavor(cfg, flavor, tok)
+    from verify import _model_device
     layers = _find_layers(model, cfg.model_arch)
     num_layers = len(layers)
     hidden = model.config.hidden_size
-    dev = "cpu"
+    dev = _model_device(model)
 
     from collections import defaultdict
     def collect(prompts):
@@ -450,7 +451,8 @@ def cmd_abl(config_path: str, method: str, alpha: float, layers_spec: str,
             # prompt-set contrast, which is diff_means in disguise.
             prefill = getattr(cfg, "paired_prefill", "Sure, I can help with that.")
             max_new = getattr(cfg, "paired_max_new_tokens", 64)
-            acts_h, acts_g = _collect_paired_output_phase(model, tok, h_f, layers, num_layers, "cpu", prefill, max_new)
+            acts_h, acts_g = _collect_paired_output_phase(
+                model, tok, h_f, layers, num_layers, _model_device(model), prefill, max_new)
             probe_mode = "paired"
             n_dirs = len(h)
             print(f"Paired output-phase directions: {len(h)} prompts "
@@ -735,7 +737,8 @@ def cmd_steer_test(config_path: str, alphas_spec: str, n_directions: int | None,
     elif dm == "paired":
         prefill = getattr(cfg, "paired_prefill", "Sure, I can help with that.")
         max_new = getattr(cfg, "paired_max_new_tokens", 64)
-        acts_h, acts_g = _collect_paired_output_phase(model, tok, h_dir, layers, num_layers, "cpu", prefill, max_new)
+        acts_h, acts_g = _collect_paired_output_phase(
+            model, tok, h_dir, layers, num_layers, _model_device(model), prefill, max_new)
         dirs, scores = extract_directions(acts_h, acts_g, num_layers, hidden, dm, 3, "cpu")
         directions_source = f"harvest: paired n={n_dir}"
     else:
