@@ -73,6 +73,11 @@ image = (
 GPU = os.environ.get("ABSOLVER_GPU", "L4")
 TIMEOUT = int(os.environ.get("ABSOLVER_TIMEOUT", "3600"))
 
+# Shared artifact volume (same as harness_modal): recovery writes the
+# directions bundle here so a later harness container (mounted at /out)
+# can consume it via --from-directions without a repo-stage round-trip.
+OUT_VOLUME = modal.Volume.from_name("absolver-phase2", create_if_missing=True)
+
 # The decoding grid: (label, generate kwargs). Mirrors campaigns/decode_grid.py.
 GRID: list[tuple[str, dict]] = [
     ("control", {}),
@@ -298,8 +303,61 @@ def _safetensors_file(d: Path) -> tuple[Path, list[str]]:
 
 @app.function(image=image, gpu=GPU, timeout=TIMEOUT, retries=0,
               secrets=[modal.Secret.from_name("hf-write-token")])
+def run_first_token_kl(base_id: str, edited_id: str) -> dict:
+    """Mean first-token KL(edited || base) over the collect gate's held-out
+    prompts — the harness `first_token_kl` gate's exact quantity, measured
+    on a PUBLISHED edit. Used to check whether that gate's absolute
+    threshold (gate_kl_max default 0.1) is satisfiable by huihui-class
+    abliterations at all (a successful refusal removal must shift the
+    first-token distribution, so the KL is expected to be large — the
+    question is how large on the reference model itself)."""
+    import torch
+
+    harmful, benign = _held_out_prompts()
+    base, tok_b = _load_model_tok(base_id)
+    edited, tok_e = _load_model_tok(edited_id)
+
+    def logprobs_first(model, tok, p: str) -> torch.Tensor:
+        formatted = _fmt(tok, p)
+        inp = tok(formatted, return_tensors="pt", truncation=True, max_length=512)
+        if torch.cuda.is_available():
+            inp = {k: v.to("cuda") for k, v in inp.items()}
+        with torch.no_grad():
+            out = model(**inp)
+        return torch.log_softmax(out.logits[0, -1].float(), dim=-1).cpu()
+
+    rows = []
+    kls = []
+    for p in harmful:
+        lp_b = logprobs_first(base, tok_b, p)
+        lp_e = logprobs_first(edited, tok_e, p)
+        pe = lp_e.exp()
+        kl = float((pe * (lp_e - lp_b)).sum().item())
+        kls.append(kl)
+        rows.append({"prompt": p, "kl": round(kl, 4)})
+        print(f"  KL {kl:8.4f}  {p[:60]!r}", flush=True)
+    del base, edited
+    gc.collect()
+    mean = sum(kls) / len(kls)
+    return {"base": base_id, "edited": edited_id,
+            "n_prompts": len(harmful), "per_prompt_kl": rows,
+            "mean_first_token_kl": round(mean, 4),
+            "harness_gate_threshold": 0.1,
+            "finish": time.strftime("%Y-%m-%d %H:%M:%S")}
+
+
+@app.function(image=image, gpu=GPU, timeout=TIMEOUT, retries=0,
+              secrets=[modal.Secret.from_name("hf-write-token")],
+              volumes={"/out": OUT_VOLUME})
 def run_tensor_diff(a_id: str, b_id: str, max_rows: int = 400) -> dict:
-    """Per-tensor diff of two model.safetensors, grouped by weight family."""
+    """Per-tensor diff of two model.safetensors, grouped by weight family.
+
+    `a_id`/`b_id` may be HF ids, local paths under the mounted repo, or
+    volume paths under /out (the shared absent-volume is mounted) — this
+    lets the fingerprint step diff our re-applied models (written to the
+    volume by harness/abl.py) against huihui's published model without a
+    local pull.
+    """
     print(f"resolving {a_id} ...", flush=True)
     a_dir = _resolve_model_dir(a_id)
     print(f"resolving {b_id} ...", flush=True)
@@ -369,6 +427,282 @@ def run_tensor_diff(a_id: str, b_id: str, max_rows: int = 400) -> dict:
     }
 
 
+_TENSOR_CLASS_SUFFIXES = [
+    ("attn_out", "self_attn.out_proj.weight"),
+    ("conv_out", "conv.out_proj.weight"),
+    ("w2", "feed_forward.w2.weight"),
+]
+
+
+def _tensor_class(name: str) -> tuple[int | None, str]:
+    m = re.search(r"layers\.(\d+)\.", name)
+    layer = int(m.group(1)) if m else None
+    for cls, suffix in _TENSOR_CLASS_SUFFIXES:
+        if name.endswith(suffix):
+            return layer, cls
+    return layer, "other"
+
+
+@app.function(image=image, gpu=GPU, timeout=TIMEOUT, retries=0,
+              secrets=[modal.Secret.from_name("hf-write-token")],
+              volumes={"/out": OUT_VOLUME})
+def run_recover_directions(base_id: str, edited_id: str,
+                           hidden: int = 2048, bundle_name: str = "directions-huihui-recovered.pt") -> dict:
+    """Recover the per-layer direction vectors from a published weight edit.
+
+    Model: the abliteration edit is a per-layer rank-1 row-space projection
+    per out-projection, `W' = W - alpha * d (d^T W)` (the harness's own
+    `_project_2d` convention: d in the ROW / output space, shared by every
+    out-projection of the layer). Then per tensor (the 32 changed
+    out-projections):
+
+        Delta = W_edited - W_base = -alpha * d (d^T W_base)   (rank 1)
+
+    so the top LEFT singular vector u1 of Delta IS d up to sign/scale, and
+    the right singular vector v1 is -alpha * (d^T W_base) (per-tensor).
+    This function:
+
+      * diffs every common 2D tensor, verifies the changed set is exactly
+        the 32 out-projections (attn x6 + conv x10 + w2 x16),
+      * per tensor: Delta rel_l2, rank-1 SVD, rank-1 reconstruction
+        residual, and a fit residual against the harness row-projection
+        formula with u1 (checks the model, not just rank-1-ness),
+      * per layer: sign-aligned mean of the layer's u1s = recovered
+        direction d_l (unit norm), least-squares alpha_l fitted over the
+        layer's tensors, and a global alpha fit over all 32,
+      * saves the harness-format directions bundle to
+        /out/<bundle_name> (the shared Volume -> consumable by
+        `abl --from-directions /out/<bundle_name>`),
+      * returns the full JSON report (evidence) for the local entrypoint.
+    """
+    import torch
+
+    print(f"resolving base {base_id} ...", flush=True)
+    base_dir = _resolve_model_dir(base_id)
+    print(f"resolving edited {edited_id} ...", flush=True)
+    edit_dir = _resolve_model_dir(edited_id)
+    base_file, _ = _safetensors_file(base_dir)
+    edit_file, _ = _safetensors_file(edit_dir)
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"device: {dev}", flush=True)
+
+    from safetensors import safe_open
+
+    by_layer: dict[int, dict[str, str]] = {}   # layer -> class -> tensor key
+    other_changed: list[str] = []
+    rows: dict[str, dict] = {}
+    n_common = n_identical = 0
+    with safe_open(base_file, framework="pt") as fb, safe_open(edit_file, framework="pt") as fe:
+        common = sorted(set(fb.keys()) & set(fe.keys()))
+        n_common = len(common)
+        for k in common:
+            wb = fb.get_tensor(k)
+            we = fe.get_tensor(k)
+            if wb.shape != we.shape or wb.dim() != 2:
+                continue
+            if torch.equal(wb, we):
+                n_identical += 1
+                continue
+            layer, cls = _tensor_class(k)
+            if cls == "other":
+                other_changed.append(k)
+                continue
+            Wb = wb.float().to(dev)
+            We = we.float().to(dev)
+            delta = We - Wb
+
+            U, S, Vh = torch.linalg.svd(delta, full_matrices=False)
+            s1 = S[0]
+            u1 = U[:, 0]
+            v1 = Vh[0, :]
+            rank1 = s1 * torch.outer(u1, v1)
+            resid = (delta - rank1).norm() / delta.norm().clamp_min(1e-12)
+            energy = (s1 ** 2 / (S ** 2).sum()).item()
+
+            # Fit the harness row-projection formula with u1 as d:
+            #   -alpha * u1 (u1^T W_base) ~= Delta  =>  alpha_t = -<Delta,proj>/<proj,proj>
+            proj = torch.outer(u1, u1 @ Wb)
+            num = float((delta * proj).sum().item())
+            den = float((proj * proj).sum().item())
+            alpha_t = -(num / den) if den > 1e-18 else float("nan")
+            fit_resid = ((delta + alpha_t * proj).norm() / delta.norm().clamp_min(1e-12)).item() if den > 1e-18 else float("nan")
+
+            # row-side diagnostics: is v1 parallel to W^T u1 (the canonical
+            # -alpha*d*(d^T W) formula) or symmetric in u1? Decides how the
+            # recovered components must be RE-APPLIED later.
+            wtu = u1 @ Wb
+            c_v_wtu = abs(float((v1 * wtu).sum())) / float(v1.norm() * wtu.norm().clamp_min(1e-12))
+            c_v_u = abs(float((v1[: min(v1.shape[0], u1.shape[0])] *
+                               u1[: min(v1.shape[0], u1.shape[0])]).sum()))
+            if v1.shape[0] == u1.shape[0]:
+                c_v_u = abs(float((v1 * u1).sum())) / float(v1.norm() * u1.norm().clamp_min(1e-12))
+            else:
+                c_v_u = float("nan")  # different input dims (w2 vs out_proj) — not comparable
+            u1_map_local = u1.cpu()
+
+            rows[k] = {
+                "layer": layer, "class": cls, "shape": list(Wb.shape),
+                "rel_l2_delta": float((delta.norm() / Wb.norm().clamp_min(1e-12)).item()),
+                "sigma1": float(s1.item()),
+                "energy_share": energy,
+                "rank1_resid": float(resid.item()),
+                "alpha_hat_u1": alpha_t,
+                "fit_resid_u1": fit_resid,
+                "cos_v1_wtu1": float(c_v_wtu),
+                "cos_v1_u1": c_v_u,
+                "u1": u1_map_local,
+                "v1": v1.cpu(),
+            }
+            by_layer.setdefault(layer, {})[cls] = k
+            del delta, U, S, Vh, rank1, proj, Wb, We, wtu
+            if dev == "cuda":
+                torch.cuda.empty_cache()
+
+    changed = list(rows.keys())
+    print(f"common={n_common} identical={n_identical} changed={len(changed)} "
+          f"other_changed={other_changed}", flush=True)
+
+    # ---- per-layer direction: sign-aligned mean of the layer's u1s ----
+    u1_map: dict[str, torch.Tensor] = {}
+    layer_dirs: dict[int, torch.Tensor] = {}
+    layer_stats: dict[int, dict] = {}
+    for layer in sorted(by_layer):
+        keys = list(by_layer[layer].values())
+        us = []
+        for k in keys:
+            U, _, _ = torch.linalg.svd(_delta_of(k, base_file, edit_file, dev),
+                                       full_matrices=False)
+            u1_map[k] = U[:, 0]
+            us.append(U[:, 0])
+        # sign-align to the first tensor, then mean + unit normalize
+        ref = us[0]
+        aligned = [u if float((u * ref).sum()) >= 0 else -u for u in us]
+        d = torch.stack(aligned).mean(dim=0)
+        d = d / d.norm().clamp_min(1e-12)
+        layer_dirs[layer] = d
+        cos_pair = [abs(float((us[i] * us[0]).sum())) for i in range(1, len(us))]
+        layer_stats[layer] = {"classes": sorted(by_layer[layer]),
+                              "n_tensors": len(us),
+                              "u1_abs_cos_vs_first": cos_pair}
+        print(f"  layer {layer:>2}: {sorted(by_layer[layer])} "
+              f"u1|cos|={[round(c, 5) for c in cos_pair]}", flush=True)
+
+    # ---- alpha fits: per-layer and global, against the harness formula ----
+    def _fit(dirs: dict[str, torch.Tensor], keys: list[str]) -> tuple[float, float, list[float]]:
+        num = den = 0.0
+        for k in keys:
+            Wb, delta = _load_pair(k, base_file, edit_file, dev)
+            proj = torch.outer(dirs[k], dirs[k] @ Wb)
+            num += float((delta * proj).sum().item())
+            den += float((proj * proj).sum().item())
+        alpha = -(num / den) if den > 1e-18 else float("nan")
+        per = []
+        for k in keys:
+            Wb, delta = _load_pair(k, base_file, edit_file, dev)
+            proj = torch.outer(dirs[k], dirs[k] @ Wb)
+            per.append(((delta + alpha * proj).norm() /
+                        delta.norm().clamp_min(1e-12)).item())
+        return alpha, den, per
+
+    fit_per_layer: dict[int, dict] = {}
+    for layer in sorted(by_layer):
+        keys = list(by_layer[layer].values())
+        d_layer = {k: layer_dirs[layer] for k in keys}
+        alpha_l, den, per = _fit(d_layer, keys)
+        fit_per_layer[layer] = {
+            "alpha_l": alpha_l, "denominator": den,
+            "fit_resid_per_tensor": {k: round(r, 5) for k, r in zip(keys, per)},
+        }
+        print(f"  layer {layer:>2}: alpha_l={alpha_l:.6f} "
+              f"resid={[round(r, 5) for r in per]}", flush=True)
+
+    all_keys = sorted(rows)
+    d_global = {k: layer_dirs[rows[k]["layer"]] for k in all_keys}
+    alpha_g, den_g, resid_g = _fit(d_global, all_keys)
+    print(f"global alpha={alpha_g:.6f} "
+          f"resid mean={sum(resid_g)/len(resid_g):.5f} max={max(resid_g):.5f}", flush=True)
+
+    # per-tensor rel_l2 that the global-alpha + per-layer-d application yields
+    expected: dict[str, float] = {}
+    for k in all_keys:
+        lyr = rows[k]["layer"]
+        d = layer_dirs[lyr]
+        Wb, _ = _load_pair(k, base_file, edit_file, dev)
+        proj = torch.outer(d, d @ Wb)
+        expected[k] = float((alpha_g * proj).norm().item() /
+                            Wb.norm().clamp_min(1e-12).item())
+        del proj, Wb
+
+    # ---- save the harness-format directions bundle ----
+    # `dirs` = per-layer unit direction (u1) for the harness formula methods
+    # (advanced/mpoa: -alpha*d*(d^T W)); `recovered_rank1` = the exact
+    # per-tensor rank-1 components for the `recovered` method (W' = W +
+    # sigma*u*v^T), which reproduces the edit at max fidelity (the row side
+    # of huihui's Delta is NOT W^T*u1 — cos_v1_wtu1 is far from 1 — so the
+    # formula methods cannot land closer than the rank-1 residual).
+    bundle = {
+        "dirs": {str(l): layer_dirs[l].cpu() for l in sorted(layer_dirs)},
+        "scores": {},
+        "model_id": base_id,
+        "dir_method": "recovered-rank1-svd",
+        "probe_mode": "weights-svd",
+        "prefill": "",
+        "flavor": "recovered",
+        "n_prompts": 32,
+        "hidden": hidden,
+        "side": "u1_left_singular",
+        "source_edited": edited_id,
+        "alpha_fit_global": alpha_g,
+        "alpha_fit_per_layer": {str(l): fit_per_layer[l]["alpha_l"] for l in fit_per_layer},
+        "per_tensor_rel_l2_expected": {k: round(v, 6) for k, v in expected.items()},
+        "per_tensor_rel_l2_huihui": {k: rows[k]["rel_l2_delta"] for k in all_keys},
+        "rank1_resid_per_tensor": {k: rows[k]["rank1_resid"] for k in all_keys},
+        "recovered_rank1": {k: {"u": rows[k]["u1"], "v": rows[k]["v1"],
+                                "sigma": rows[k]["sigma1"]} for k in all_keys},
+    }
+    import os as _os
+    out_path = Path("/out") / bundle_name
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(bundle, out_path)
+    print(f"SAVED {out_path} ({out_path.stat().st_size} bytes)", flush=True)
+
+    # strip tensors for the JSON report; bundle carries them
+    report_rows = {k: {kk: vv for kk, vv in v.items() if kk not in ("u1", "v1")}
+                   for k, v in rows.items()}
+    return {
+        "base": base_id, "edited": edited_id,
+        "n_common": n_common, "n_identical": n_identical,
+        "n_changed": len(changed), "changed": changed,
+        "other_changed": other_changed,
+        "layers": sorted(by_layer),
+        "per_tensor": report_rows,
+        "layer_dirs": {str(l): layer_dirs[l].cpu().tolist() for l in sorted(layer_dirs)},
+        "layer_stats": {str(l): v for l, v in layer_stats.items()},
+        "alpha_fit_per_layer": fit_per_layer,
+        "alpha_fit_global": alpha_g,
+        "resid_global_per_tensor": dict(zip(all_keys, resid_g)),
+        "rel_l2_expected_with_global_alpha": {k: round(v, 6) for k, v in expected.items()},
+        "rel_l2_delta_huihui": {k: rows[k]["rel_l2_delta"] for k in all_keys},
+        "bundle_remote": str(out_path),
+        "finish": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def _delta_of(key: str, base_file, edit_file, dev):
+    import torch
+    return _load_pair(key, base_file, edit_file, dev)[1]
+
+
+def _load_pair(key: str, base_file, edit_file, dev):
+    """Re-open the safetensors and return (W_base, Delta) for `key`."""
+    import torch
+    from safetensors import safe_open
+    with safe_open(base_file, framework="pt") as fb, safe_open(edit_file, framework="pt") as fe:
+        Wb = fb.get_tensor(key).float().to(dev)
+        We = fe.get_tensor(key).float().to(dev)
+    return Wb, We - Wb
+
+
 @app.local_entrypoint()
 def main(argv: str = ""):
     import argparse
@@ -396,12 +730,33 @@ def main(argv: str = ""):
     p.add_argument("--max-rows", type=int, default=400)
     p.add_argument("--out", required=True)
 
+    p = sub.add_parser("first-token-kl",
+                       help="mean first-token KL(edited || base) on the held-out prompts")
+    p.add_argument("--base", required=True, help="HF id of the base model")
+    p.add_argument("--edited", required=True, help="HF id of the edited model")
+    p.add_argument("--out", required=True, help="local JSON report path")
+
+    p = sub.add_parser("recover-directions",
+                       help="rank-1 SVD recovery of the per-layer directions "
+                            "from a published weight edit (base vs edited)")
+    p.add_argument("--base", required=True, help="HF id of the base model")
+    p.add_argument("--edited", required=True, help="HF id of the edited model")
+    p.add_argument("--hidden", type=int, default=2048)
+    p.add_argument("--bundle-name", default="directions-huihui-recovered.pt",
+                   help="bundle filename written to the /out Volume")
+    p.add_argument("--out", required=True, help="local JSON report path")
+
     args = ap.parse_args(argv.split())
     if args.cmd == "decode-grid":
         doc = run_decode_grid.remote(args.model_ref, args.labels,
                                      args.max_new, args.tag)
     elif args.cmd == "huihui-ab":
         doc = run_huihui_ab.remote(args.model_id, args.max_new)
+    elif args.cmd == "recover-directions":
+        doc = run_recover_directions.remote(args.base, args.edited,
+                                            args.hidden, args.bundle_name)
+    elif args.cmd == "first-token-kl":
+        doc = run_first_token_kl.remote(args.base, args.edited)
     else:
         doc = run_tensor_diff.remote(args.a, args.b, args.max_rows)
 
@@ -426,6 +781,29 @@ def main(argv: str = ""):
                           and r["degeneracy_ratio"] < 0.05)
             print(f"{cfg_name:>12}: refusal {n_ref}/{len(doc['harmful_prompts'])} "
                   f"| clean {n_clean}/{len(doc['harmful_prompts'])}")
+    elif args.cmd == "recover-directions":
+        print("\n== recovery summary ==")
+        print(f"changed tensors: {doc['n_changed']} (other_changed={doc['other_changed']})")
+        rels = [r["rel_l2_delta"] for r in doc["per_tensor"].values()]
+        res1 = [r["rank1_resid"] for r in doc["per_tensor"].values()]
+        fitu = [r["fit_resid_u1"] for r in doc["per_tensor"].values()]
+        print(f"Delta rel_l2:      min={min(rels):.4f} mean={sum(rels)/len(rels):.4f} max={max(rels):.4f}")
+        print(f"rank-1 resid:      min={min(res1):.4f} mean={sum(res1)/len(res1):.4f} max={max(res1):.4f}")
+        print(f"u1-formula resid:  min={min(fitu):.4f} mean={sum(fitu)/len(fitu):.4f} max={max(fitu):.4f}")
+        print(f"alpha per layer:   {sorted(doc['alpha_fit_per_layer'].items())}")
+        print(f"global alpha:      {doc['alpha_fit_global']:.6f}")
+        csvw = [r["cos_v1_wtu1"] for r in doc["per_tensor"].values()]
+        csvu = [r["cos_v1_u1"] for r in doc["per_tensor"].values() if r["cos_v1_u1"] == r["cos_v1_u1"]]
+        print(f"cos(v1, W^T u1):   mean={sum(csvw)/len(csvw):.4f} "
+              f"(canonical -a*d*(d^T W) row fit)")
+        print(f"cos(v1, u1):       mean={sum(csvu)/len(csvu):.4f} (square tensors only)")
+        print(f"bundle written to: {doc['bundle_remote']}")
+    elif args.cmd == "first-token-kl":
+        print("\n== first-token KL ==")
+        for r in doc["per_prompt_kl"]:
+            print(f"  KL {r['kl']:8.4f}  {r['prompt'][:60]!r}")
+        print(f"mean first-token KL {doc['mean_first_token_kl']:.4f} "
+              f"(harness threshold {doc['harness_gate_threshold']})")
     else:
         print(f"\n== diff {doc['a']} vs {doc['b']} ==")
         print(f"keys a={doc['n_keys_a']} b={doc['n_keys_b']} common={doc['common']} "

@@ -153,6 +153,58 @@ def test_apply_all32_projects_every_out_projection(lfm_toy):
     assert _resolve_proj(lfm_toy.layers[0], "conv_out") is not lfm_toy.layers[0].conv.conv
 
 
+def test_recovered_applies_exact_rank1_deltas(lfm_toy):
+    """method=recovered applies W' = W + sigma*outer(u,v) per tensor (the
+    max-fidelity re-application of recovered direction-edit components) —
+    the delta is EXACT, unlike the -alpha*d*(d^T W) formula methods."""
+    toy = lfm_toy
+    hidden, inter = 8, 4
+    torch.manual_seed(7)
+    deltas: dict = {}
+    expected: dict[str, torch.Tensor] = {}
+    for i, layer in enumerate(toy.layers):
+        if i % 2 == 0:
+            mod = layer.conv.out_proj if i % 2 == 0 and hasattr(layer, "conv") else None
+            if mod is not None:
+                key = f"model.layers.{i}.conv.out_proj.weight"
+                u = torch.randn(hidden); u /= u.norm()
+                v = torch.randn(hidden); v /= v.norm()
+                s = 0.3 + 0.1 * i
+                deltas[key] = {"u": u, "v": v, "sigma": s}
+                expected[key] = mod.weight.data + s * torch.outer(u, v)
+        if i % 2 == 1 or True:
+            key = f"model.layers.{i}.feed_forward.w2.weight"
+            w2 = layer.feed_forward.w2
+            u = torch.randn(hidden); u /= u.norm()
+            v = torch.randn(inter); v /= v.norm()
+            s = 0.2 + 0.1 * i
+            deltas[key] = {"u": u, "v": v, "sigma": s}
+            expected[key] = w2.weight.data + s * torch.outer(u, v)
+        if i % 2 == 1:
+            key = f"model.layers.{i}.self_attn.out_proj.weight"
+            u = torch.randn(hidden); u /= u.norm()
+            v = torch.randn(hidden); v /= v.norm()
+            s = 0.15 + 0.1 * i
+            deltas[key] = {"u": u, "v": v, "sigma": s}
+            expected[key] = toy.layers[i].self_attn.out_proj.weight.data + s * torch.outer(u, v)
+
+    candidate = {"method": "recovered", "dir_method": "recovered-rank1-svd",
+                 "target_layers": list(range(16)),
+                 "target_weights": ["o_proj", "conv_out", "w2"],
+                 "alpha": 1.0, "passes": 1, "recovered_deltas": deltas}
+    _apply_candidate(toy, {}, None, candidate)
+    applied = candidate["_applied"]
+    assert len(applied) == 32, f"expected 32 projected tensors, got {len(applied)}"
+    for key, want in expected.items():
+        got = dict(toy.model.layers[int(key.split('.')[2])].named_parameters())
+        # locate the module by walking the key
+        parts = key.split(".")
+        mod = toy.model.layers[int(parts[2])]
+        for p in parts[3:-1]:
+            mod = getattr(mod, p)
+        assert torch.allclose(mod.weight.data, want, atol=1e-6), key
+
+
 def test_zero_match_candidate_is_loud_not_silent(lfm_toy, caplog):
     """A candidate whose weight names resolve nowhere must be a loud no-op
     warning (never print 'Applied' with byte-identical weights)."""

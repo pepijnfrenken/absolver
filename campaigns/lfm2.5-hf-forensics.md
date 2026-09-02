@@ -3,7 +3,7 @@ campaign_id: lfm2.5-hf-forensics-2026-09-02
 target_model: LiquidAI/LFM2.5-1.2B-Instruct (ablated: our all6attn-chat-a2.0 vs huihui-ai/Huihui-LFM2.5-1.2B-Instruct-abliterated)
 arch: lfm2 hybrid (16 layers; full_attention at [2,5,8,10,12,14], conv elsewhere; hidden 2048)
 date: 2026-09-02
-status: "NEGATIVE for our ablated model — repetition-penalty / n-gram / sampling rescue DOES NOT convert the ablated model to compliance (collapse-to-evasion confirmed). FORENSIC WIN: huihui's published abliteration of the SAME base complies 5/5 at DEFAULT greedy, and the tensor diff pins the edit-geometry difference: we touched only the 6 attention out_projs; huihui touches the out-projection at EVERY layer (attn out_proj x6 + conv out_proj x10 + ffn w2 x16 = 32 tensors). The family abliterates cleanly; OUR single-shape edit was wrong, not the arch."
+status: "NEGATIVE for our ablated model — repetition-penalty / n-gram / sampling rescue DOES NOT convert the ablated model to compliance (collapse-to-evasion confirmed). FORENSIC WIN: huihui's published abliteration of the SAME base complies 5/5 at DEFAULT greedy, and the tensor diff pins the edit-geometry difference: we touched only the 6 attention out_projs; huihui touches the out-projection at EVERY layer (attn out_proj x6 + conv out_proj x10 + ffn w2 x16 = 32 tensors). The family abliterates cleanly; OUR single-shape edit was wrong, not the arch. Confound chain COMPLETE via the lfm2.5-recovery campaign (2026-09-02): the direction vectors recovered rank-1 from the published weights reproduce huihui's model at rel_l2 0.001-0.002 and PASS the gates (0/5 refusal, verbatim compliance) — first POSITIVE campaign."
 hardware: Modal L4 (24 GB) — compute fully remote; local box never loaded a model
 cost: ~0.2 GPU-hrs (L4)
 methods_tried: [mpoa (ours, from flavorfix campaign), sumandora-style out-projection ablation (huihui, forensically identified)]
@@ -47,7 +47,8 @@ bugs_found:
 recommended_next:
   - sumandora_geometry_test_12b: "DONE (2026-09-02) -> campaigns/lfm2.5-all32-replication/README.md. Geometry replicated faithfully (pipeline fix 5bfef97); no direction source of ours (chat paired, raw paired, raw diff_means) reproduces the published compliance — coverage necessary, not sufficient."
   - update_conv_rule: "DONE (5bfef97): shape-gated rule shipped in _resolve_proj + inspect audit + campaign template + KB."
-  - direction_source_ablation: "DONE (2026-09-02): A/B'd 3 direction sources on the all-32 geometry — all fail the gate; the direction VECTORS (prompt set + extraction + coefficient) are the remaining confound. Next: recover d per tensor from W_huihui - W_base (rank-1 SVD of the diff)."
+  - direction_source_ablation: "DONE (2026-09-02): A/B'd 3 direction sources on the all-32 geometry — all fail the gate; the direction VECTORS (prompt set + extraction + coefficient) are the remaining confound. RESOLVED by the lfm2.5-recovery campaign: rank-1 SVD of W_huihui - W_base recovers huihui's exact per-layer directions (u1 shared across the layer's out-projections at |cos| 0.99); exact re-application fingerprints at rel_l2 0.001-0.002 and PASSES the gates (0/5 refusal, verbatim compliance at default greedy). FIRST POSITIVE campaign — see campaigns/lfm2.5-recovery/README.md."
+  - cluster_gate_surface_finding: "DONE (2026-09-02, lfm2.5-recovery): the correct recipe fails first_token_kl @ 0.1 by construction — our reproduction scores 3.02, huihui's own model 5.89; the gate needs relative-to-reference semantics or family calibration."
 ---
 
 # LFM2.5 forensics: decoding-rescue test + huihui A/B + tensor diff

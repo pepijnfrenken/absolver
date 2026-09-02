@@ -658,6 +658,67 @@ def _apply_steering(model: Any, layers_mod, directions: dict, candidate: dict[st
                 _STEERING_TARGETS)
 
 
+_RECOVERED_KEY_SUFFIX = {
+    "o_proj": "self_attn.out_proj",
+    "conv_out": "conv.out_proj",
+    "w2": "feed_forward.w2",
+    "ffn_out": "feed_forward.w2",
+}
+
+
+def _apply_recovered(model: Any, layers_mod, directions: dict, candidate: dict[str, Any]) -> None:
+    """Exact rank-1 re-application of DIRECTION-EDIT components recovered
+    offline from a published edit (connectors/forensics_modal.py
+    `recover-directions`): per tensor, W' = W + sigma * outer(u, v) where
+    (sigma, u, v) is the top SVD triplet of Delta = W_edited - W_base.
+
+    Why not the -alpha*d*(d^T W) formula: measured on huihui's LFM2.5
+    edit, the column side of Delta IS a shared per-layer direction u1
+    (cos ~0.99 across the layer's out-projections) but the row side is NOT
+    parallel to W^T u1 (fit residual ~0.42) — so formula methods land far
+    from the edited weights, while the rank-1 reconstruction lands at the
+    bf16-storage noise floor. Components come from
+    candidate["recovered_deltas"] keyed by full tensor name
+    (model.layers.<i>.<class>.weight). `alpha` is unused (the sigma scale
+    already encodes it); pass 1.0.
+    """
+    deltas = candidate.get("recovered_deltas") or {}
+    if not deltas:
+        logger.warning(
+            "SWEEP: method=recovered but candidate has no recovered_deltas "
+            "(bundle lacked recovered_rank1) — no-op without it.")
+        return
+    applied = candidate.setdefault("_applied", [])
+    for layer_idx in candidate["target_layers"]:
+        if layer_idx >= len(layers_mod):
+            continue
+        layer = layers_mod[layer_idx]
+        for wname in candidate["target_weights"]:
+            suffix = _RECOVERED_KEY_SUFFIX.get(wname)
+            if suffix is None:
+                continue
+            key = f"model.layers.{layer_idx}.{suffix}.weight"
+            comp = deltas.get(key)
+            if comp is None:
+                continue
+            for mod, w in _iter_resolved_projs(layer, wname):
+                w0 = w.clone()
+                before = float(w0.norm().item())
+                u = comp["u"].float().to(device=w.device)
+                v = comp["v"].float().to(device=w.device)
+                s = float(comp["sigma"])
+                delta = (s * torch.outer(u, v)).to(dtype=w.dtype)
+                w.add_(delta)
+                after = float(w.norm().item())
+                rel = float((w0 - w).norm().item()) / max(before, 1e-12)
+                applied.append({
+                    "layer": layer_idx, "weight": wname, "tensor": key,
+                    "shape": list(w.shape), "rel_change": round(rel, 6),
+                    "norm_before": round(before, 4), "norm_after": round(after, 4),
+                })
+                del delta
+
+
 def _apply_candidate(model: Any, directions: dict, pristine: dict | None,
                      candidate: dict[str, Any], good_dirs: dict | None = None,
                      directions_secondary: dict | None = None) -> None:
@@ -684,6 +745,8 @@ def _apply_candidate(model: Any, directions: dict, pristine: dict | None,
             _apply_bias_vectors(model, layers_mod, directions, candidate)
         elif method == "direct_ablation":
             _apply_direct_ablation(model, layers_mod, directions, candidate)
+        elif method == "recovered":
+            _apply_recovered(model, layers_mod, directions, candidate)
         elif method == "stacked_ablation":
             _apply_stacked(model, layers_mod, directions, candidate, directions_secondary)
         elif method == "projected":

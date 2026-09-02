@@ -408,6 +408,7 @@ def cmd_abl(config_path: str, method: str, alpha: float, layers_spec: str,
     probe_mode = "input"
     prefill = None
     n_dirs = 0
+    recovered_deltas: dict = {}
     if from_directions:
         # Reuse a saved direction harvest (TOOLKIT-FEEDBACK §1d): one
         # expensive harvest serves two alphas/layer-sets, and a recorded
@@ -427,7 +428,10 @@ def cmd_abl(config_path: str, method: str, alpha: float, layers_spec: str,
         print(f"Loaded {len(dirs)} layer directions from {from_directions} "
               f"(dir_method={data.get('dir_method')}, flavor={data.get('flavor')}, "
               f"n_prompts={n_dirs})")
-
+        recovered_deltas = data.get("recovered_rank1") or {}
+        if recovered_deltas:
+            print(f"Bundle carries {len(recovered_deltas)} per-tensor rank-1 "
+                  f"components (usable with --method recovered)")
     else:
         # Collect directions fresh (never reuse stale ones silently)
         from collections import defaultdict
@@ -474,6 +478,8 @@ def cmd_abl(config_path: str, method: str, alpha: float, layers_spec: str,
     candidate = {"method": method, "dir_method": dm,
                  "target_layers": target_layers, "target_weights": weights,
                  "alpha": alpha, "passes": passes}
+    if recovered_deltas:
+        candidate["recovered_deltas"] = recovered_deltas
     _apply_candidate(model, dirs, None, candidate)
     applied = candidate.get("_applied", [])
     if not applied:
@@ -941,7 +947,7 @@ def main() -> int:
 
     p = sub.add_parser("abl", help="apply ONE config to a fresh model")
     p.add_argument("config")
-    p.add_argument("--method", required=True, help="advanced|mpoa|stacked_ablation|bias_vectors|direct_ablation|steering|lora|projected")
+    p.add_argument("--method", required=True, help="advanced|mpoa|recovered|stacked_ablation|bias_vectors|direct_ablation|steering|lora|projected")
     p.add_argument("--alpha", type=float, required=True)
     p.add_argument("--layers", required=True, help="e.g. 24,25,26,27 or 24-27")
     p.add_argument("--weights", default="o_proj,down_proj", help="comma list")
