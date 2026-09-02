@@ -12,12 +12,15 @@ method: mpoa
 dir_method: paired
 n_directions: 3
 alpha: 2.0
-passes: 2
-# Attention-only layers (LFM2 hybrid: conv layers must not be projected).
-# The winning HF recipe (LFM2.5-1.2B-Instruct-Abliterated-Paired-Alpha2)
-# ablates ALL SIX full-attention blocks at alpha 2.0 on out_proj only.
-target_layers: [2, 5, 8, 10, 12, 14]
-target_weights: [o_proj]
+passes: 1
+# huihui-validated geometry (forensics 2026-09-02): refusal spans ALL 32
+# out-projections — attn out_proj x6 + conv out_proj x10 + ffn w2 x16.
+# Coverage > magnitude; conv.out_proj is a 2D hidden Linear and IS
+# projectable (the old "conv must never be projected" rule was REFUTED).
+# The earlier 6-attention recipe (PinoCookie ...Paired-Alpha2, alpha 2.0
+# on out_proj only) is kept as a historical reference, not a target.
+target_layers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+target_weights: [o_proj, conv_out, w2]
 
 # Paired output-phase probe: same harmful prompts in both groups, unprimed
 # refusal vs affirmative-prefill generation. This is the direction source
@@ -73,20 +76,21 @@ sweep_dir_methods:
   - "paired"
   - "diff_means"
 # LFM2.5 is a hybrid arch — layer_types = [conv, conv, full_attention, conv, ...].
-# ONLY full_attention layers (2, 5, 8, 10, 12, 14) have hidden-shaped weights;
-# conv layers must never be projected. Layer sets below target attention only.
-# [12,14] omitted — dominated by the all-six set; alpha 0.5 omitted — proven
-# insufficient on this model (refusal stayed 95%).
+# Every layer's out-projection is projectable (attn out_proj, conv out_proj,
+# ffn w2). The all-16 set is the huihui-validated winner; attention sets kept
+# as neighbors. alpha 0.5 omitted — proven insufficient on this model.
 sweep_layer_sets:
   - [14]
   - [10, 12, 14]
   - [2, 5, 8, 10, 12, 14]
+  - [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 sweep_alphas: [1.0, 2.0]
 sweep_passes: [1, 2]
-# Winning recipe projects out_proj ONLY (no down_proj) — include both options.
+# Both the old o_proj-only and the huihui all-32 coverage are in the space.
 sweep_target_weights:
   - [o_proj]
   - [o_proj, down_proj]
+  - [o_proj, conv_out, w2]
 # Re-score the top 5 keyword winners with the real LLM judge (5 prompts each).
 sweep_judge_enabled: true
 sweep_judge_finalists: 5

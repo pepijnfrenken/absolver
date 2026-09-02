@@ -11,7 +11,8 @@ dir_method: diff_means
 n_directions: 3
 alpha: 0.5
 passes: 2
-# Attention-only layers (LFM2 hybrid: conv layers must not be projected).
+# Historical recipe for the Thinking checkpoint (proven not to move it).
+# Conv layers ARE projectable (conv.out_proj) — see lfm2.5-1.2b-instruct.yaml.
 target_layers: [14]
 target_weights: [o_proj, down_proj]
 

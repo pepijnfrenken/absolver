@@ -257,8 +257,9 @@ def _collect_paired_output_phase(
             resp = steps[1:] if len(steps) > 1 else steps
             # steps are (1, hidden) [batch=1]; squeeze the batch dim so the
             # mean is a plain 1D hidden vector. Without this, directions stay
-            # (1, hidden) and _project_2d's shape guard (d.shape[0] != W.shape[1])
-            # silently skips the projection — the whole ablation becomes a no-op.
+            # (1, hidden) and _project_2d's reshape would fix them anyway —
+            # but downstream consumers expect plain 1D vectors, so squeeze
+            # at the source.
             refusal_acts[i].append(torch.stack(resp).mean(dim=0).squeeze(0))
 
         # --- affirmative-prefilled condition ---

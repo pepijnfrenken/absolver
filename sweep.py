@@ -50,10 +50,12 @@ def _build_candidates(cfg: Any, layer_types: list[str] | None = None) -> list[di
     method override dict applied on top of the base config.
 
     ``layer_types`` (e.g. [\"conv\", \"full_attention\", ...] from the model
-    config) filters layer sets: hybrid architectures like LFM have conv
-    layers whose weight shapes don't match the hidden dim, so projecting
-    them corrupts the model. Any candidate targeting a conv layer is
-    dropped.
+    config) drives the auto-extended layer set ONLY: hybrid architectures
+    like LFM2.5 have conv blocks whose OUT_PROJECTION (``conv.out_proj``,
+    2D square) IS projectable alongside ffn ``w2`` — huihui's published
+    abliteration of LFM2.5-1.2B-Instruct projects all 32 out-projections
+    (attn x6 + conv x10 + ffn w2 x16). Conv layers are NOT filtered out;
+    per-weight resolution in ``_resolve_proj`` gates what actually projects.
     """
     methods = getattr(cfg, "sweep_methods", None) or [cfg.method]
     # P1-2: the sweep must only search methods EXCISE can actually realize.
@@ -81,24 +83,17 @@ def _build_candidates(cfg: Any, layer_types: list[str] | None = None) -> list[di
     passes = list(getattr(cfg, "sweep_passes", None) or [cfg.passes])
     weight_sets = list(getattr(cfg, "sweep_target_weights", None) or [[]])
 
-    def _is_conv_layer(idx: int) -> bool:
-        if not layer_types:
-            return False
-        t = layer_types[idx] if idx < len(layer_types) else None
-        return t is not None and "conv" in str(t).lower()
-
     # Auto-extend the layer space: when the sweep didn't specify layer sets,
-    # add the full attention-layer set (all non-conv layers) as a candidate.
-    # This is how the pipeline *finds* recipes like the LFM2.5 winner
-    # (mpoa x paired x [2,5,8,10,12,14] x alpha 2.0) without a hand-written
-    # config — the all-attention set is always tried when layer_types exist.
+    # add the FULL layer set (all 0..n-1) as a candidate. This is how the
+    # pipeline *finds* recipes like the LFM2.5 all-32 out-projection winner
+    # (huihui: attn out_proj + conv out_proj + ffn w2 at every layer), which
+    # requires targeting conv layers too — conv.out_proj is a hidden-shaped
+    # Linear and IS projectable, so there is no non-projectable layer class
+    # to exclude here (the old all-attention auto-extend encoded the
+    # now-refuted "conv must never be projected" rule).
     if layer_types and (not layer_sets or layer_sets == [[]]):
-        attention_idxs = [
-            i for i in range(len(layer_types))
-            if not _is_conv_layer(i)
-        ]
-        if attention_idxs:
-            layer_sets.append(attention_idxs)
+        if layer_types:
+            layer_sets.append(list(range(len(layer_types))))
     elif not layer_sets or layer_sets == [[]]:
         # Dense models without layer_types: fall back to the configured
         # target_layers so an empty sweep space still searches something.
@@ -109,10 +104,6 @@ def _build_candidates(cfg: Any, layer_types: list[str] | None = None) -> list[di
     for m, dm, ls, a, p, ws in itertools.product(
         methods, dir_methods, layer_sets, alphas, passes, weight_sets
     ):
-        # Skip candidates whose layer set includes a conv layer — projecting
-        # conv weights (non-hidden-shaped) corrupts the model.
-        if any(_is_conv_layer(idx) for idx in ls):
-            continue
         # Steering is an activation-level edit — it tolerates (and needs)
         # much wider alphas than weight projection. If the sweep didn't
         # explicitly configure sweep_alphas, give the steering cells their
@@ -259,10 +250,23 @@ def _resolve_proj(layer: Any, wname: str):
     Naming differences handled:
       - llama-style:      self_attn.o_proj / mlp.down_proj (square o_proj)
       - LFM2.5 attention: self_attn.out_proj / feed_forward.w2
+      - LFM2.5 hybrid:    conv.out_proj (conv block) / feed_forward.w2
       - MoE:              mlp.experts[*].down_proj  (returns the list)
-      - LFM2.5 conv only: no self_attn at all -> None (conv layers must
-        NEVER be projected; their conv/in_proj/out_proj weight is 3D and
-        hidden-space directions do not apply).
+
+    Projectability rule (the hard-won LFM2.5 lesson, forensics 2026-09-02):
+    ANY out-projection whose OUTPUT dim lives in the hidden space accepts a
+    hidden-space direction — the projection math is W[out, in] -= d (d^T W)
+    with d in the OUTPUT space, so the input dim is irrelevant.
+
+      - attn `out_proj`   [hidden, hidden]  — square, always projectable
+      - conv `out_proj`   [hidden, hidden]  — 2D square Linear on the conv
+        block; projectable WHEN 2D. A blank "conv must never be projected"
+        guard is WRONG for this hybrid (the Conv1d `conv.conv` is 3D and
+        `in_proj` is input-side — those are not; `out_proj` is).
+      - ffn `w2`          [hidden, inter]  — the MLP out-projection; NOT
+        square on LFM2.5 (measured [2048, 8192]) but output dim == hidden,
+        so it projects. Verified: huihui's published abliteration edits all
+        three families (attn x6 + conv out_proj x10 + ffn w2 x16 = 32).
 
     This closes the silent-skip hole where the old code only matched the
     canonical name: '--weights o_proj' on LFM2.5 matched NOTHING and the
@@ -282,15 +286,54 @@ def _resolve_proj(layer: Any, wname: str):
         if mod is None:
             mod = getattr(attn, "out_proj", None)
         return mod if mod is not None and hasattr(mod, "weight") else None
-    if wname == "down_proj":
+    if wname == "conv_out":
+        # LFM2.5 conv block: in_proj -> causal Conv1d -> out_proj. Only the
+        # 2D SQUARE out_proj is a hidden-space out-projection; the Conv1d
+        # weight (3D) and in_proj (input-side) are not. Shape-gate so a
+        # weird arch can never resolve a non-projectable weight here.
+        conv = getattr(layer, "conv", None)
+        if conv is None:
+            return None
+        mod = getattr(conv, "out_proj", None)
+        if mod is None or not hasattr(mod, "weight"):
+            return None
+        w = mod.weight
+        if w.dim() != 2 or w.shape[0] != w.shape[1]:
+            return None
+        return mod
+    if wname in ("down_proj", "w2", "ffn_out"):
         ff = getattr(layer, "mlp", None) or getattr(layer, "feed_forward", None)
         if ff is None:
             return None
         mod = getattr(ff, "down_proj", None)
         if mod is None:
             mod = getattr(ff, "w2", None)
-        return mod if mod is not None and hasattr(mod, "weight") else None
+        if mod is None or not hasattr(mod, "weight"):
+            return None
+        # MLP out-projection: W[hidden, inter] — output dim IS the hidden
+        # space, input dim is NOT (LFM2.5 w2 measures [2048, 8192]). Do NOT
+        # require square here; any 2D weight whose output space is hidden
+        # projects. _project_2d raises loudly on a true mismatch.
+        if mod.weight.dim() != 2:
+            return None
+        return mod
     return None
+
+
+def _iter_resolved_projs(layer: Any, wname: str):
+    """Yield (module, weight.data) for every projection `wname` resolves to
+    on this layer (list-aware for expert.down). Shared by all `_apply_*`
+    weight-editing methods so every method consumes the SAME resolution
+    (conv_out / w2 included) instead of hand-rolled name checks.
+    """
+    mods = _resolve_proj(layer, wname)
+    if not mods:
+        return
+    if isinstance(mods, list):
+        for m in mods:
+            yield m, m.weight.data
+    else:
+        yield mods, mods.weight.data
 
 
 def _apply_advanced(model: Any, layers_mod, directions: dict, candidate: dict[str, Any]) -> None:
@@ -361,24 +404,28 @@ def _apply_bias_vectors(model: Any, layers_mod, directions: dict, candidate: dic
     """Output bias modification: add/subtract the refusal direction scaled by
     alpha to the output of the target layers. Non-destructive, works well
     for MoE + dense models where weight projection is too aggressive."""
+    applied = candidate.setdefault("_applied", [])
     for layer_idx in candidate["target_layers"]:
         if layer_idx not in directions or layer_idx >= len(layers_mod):
             continue
         layer = layers_mod[layer_idx]
         dirs = directions[layer_idx]
         d = _as_1d(dirs)
-        # Add bias to the layer output (both self-attention output and MLP output)
-        if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
-            bias_mod = layer.self_attn.o_proj.bias
-            if bias_mod is not None:
-                w = layer.self_attn.o_proj.weight.data
-                bias_mod.data.add_(d.to(device=w.device, dtype=w.dtype) * candidate["alpha"])
-        ff = getattr(layer, "mlp", None) or getattr(layer, "feed_forward", None)
-        if ff is not None and hasattr(ff, "down_proj"):
-            bias_mod = ff.down_proj.bias
-            if bias_mod is not None:
-                w = ff.down_proj.weight.data
-                bias_mod.data.add_(-d.to(device=w.device, dtype=w.dtype) * candidate["alpha"])  # subtract refusal direction from MLP output
+        for wname in candidate["target_weights"]:
+            for mod, w in _iter_resolved_projs(layer, wname):
+                bias_mod = getattr(mod, "bias", None)
+                if bias_mod is None:
+                    continue
+                # attention out-projections ADD to the residual; MLP
+                # out-projections SUBTRACT the refusal component — the
+                # two-stage sign convention from the original method.
+                sign = -1.0 if wname in ("down_proj", "w2", "ffn_out") else 1.0
+                bias_mod.data.add_(sign * d.to(device=w.device, dtype=w.dtype) * candidate["alpha"])
+                applied.append({
+                    "layer": layer_idx, "weight": wname,
+                    "shape": list(w.shape),
+                    "rel_change": None, "norm_before": None, "norm_after": None,
+                })
 
 
 def _apply_stacked(model: Any, layers_mod, directions: dict, candidate: dict[str, Any],
@@ -390,6 +437,7 @@ def _apply_stacked(model: Any, layers_mod, directions: dict, candidate: dict[str
     RAISES refusal (0.55); the diff_means input-phase direction alone lowers
     it but not to 0; applying both nets refusal 0.0 on Qwen2.5-1.5B.
     """
+    applied = candidate.setdefault("_applied", [])
     secondary = directions_secondary or {}
     for layer_idx in candidate["target_layers"]:
         if layer_idx not in directions or layer_idx >= len(layers_mod):
@@ -399,18 +447,18 @@ def _apply_stacked(model: Any, layers_mod, directions: dict, candidate: dict[str
         d = _as_1d(dirs)
         d2 = _as_1d(secondary[layer_idx]) if layer_idx in secondary else None
         for wname in candidate["target_weights"]:
-            if wname == "o_proj" and hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
-                w = layer.self_attn.o_proj.weight.data
+            for mod, w in _iter_resolved_projs(layer, wname):
+                w0 = w.clone()
+                before = float(w0.norm().item())
                 _project_2d(w, d.to(device=w.device), candidate["alpha"])
                 if d2 is not None:
                     _project_2d(w, d2.to(device=w.device), candidate["alpha"])
-            elif wname == "down_proj":
-                ff = getattr(layer, "mlp", None) or getattr(layer, "feed_forward", None)
-                if ff is not None and hasattr(ff, "down_proj"):
-                    w = ff.down_proj.weight.data
-                    _project_2d(w, d.to(device=w.device), candidate["alpha"])
-                    if d2 is not None:
-                        _project_2d(w, d2.to(device=w.device), candidate["alpha"])
+                applied.append({
+                    "layer": layer_idx, "weight": wname,
+                    "shape": list(w.shape),
+                    "rel_change": round(float((w0 - w).norm().item()) / max(before, 1e-12), 6),
+                    "norm_before": round(before, 4), "norm_after": round(float(w.norm().item()), 4),
+                })
 
 
 def _apply_direct_ablation(model: Any, layers_mod, directions: dict, candidate: dict[str, Any]) -> None:
@@ -420,6 +468,7 @@ def _apply_direct_ablation(model: Any, layers_mod, directions: dict, candidate: 
     This is the standard orthogonal projection; the term is NOT scaled by
     ||d^T W|| (that would feed back into ||W|| and blow up on later passes).
     """
+    applied = candidate.setdefault("_applied", [])
     for layer_idx in candidate["target_layers"]:
         if layer_idx not in directions or layer_idx >= len(layers_mod):
             continue
@@ -427,20 +476,21 @@ def _apply_direct_ablation(model: Any, layers_mod, directions: dict, candidate: 
         dirs = directions[layer_idx]
         d = _as_1d(dirs)
         for wname in candidate["target_weights"]:
-            if wname == "o_proj" and hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
-                w = layer.self_attn.o_proj.weight
+            for mod, w in _iter_resolved_projs(layer, wname):
                 # projection is OUTPUT-space (row) — d must match W.shape[0].
                 # (old guard checked shape[1], silently skipping down_proj etc.)
-                if w.dim() == 2 and d.shape[0] == w.shape[0]:
-                    d_w = d.to(device=w.device, dtype=w.dtype)
-                    w.data.sub_(candidate["alpha"] * d_w.unsqueeze(1) @ (d_w @ w).unsqueeze(0))
-            elif wname == "down_proj":
-                ff = getattr(layer, "mlp", None) or getattr(layer, "feed_forward", None)
-                if ff is not None and hasattr(ff, "down_proj"):
-                    w = ff.down_proj.weight
-                    if w.dim() == 2 and d.shape[0] == w.shape[0]:
-                        d_w = d.to(device=w.device, dtype=w.dtype)
-                        w.data.sub_(candidate["alpha"] * d_w.unsqueeze(1) @ (d_w @ w).unsqueeze(0))
+                if w.dim() != 2 or d.shape[0] != w.shape[0]:
+                    continue
+                w0 = w.clone()
+                before = float(w0.norm().item())
+                d_w = d.to(device=w.device, dtype=w.dtype)
+                w.data.sub_(candidate["alpha"] * d_w.unsqueeze(1) @ (d_w @ w).unsqueeze(0))
+                applied.append({
+                    "layer": layer_idx, "weight": wname,
+                    "shape": list(w.shape),
+                    "rel_change": round(float((w0 - w).norm().item()) / max(before, 1e-12), 6),
+                    "norm_before": round(before, 4), "norm_after": round(float(w.norm().item()), 4),
+                })
 
 
 def _apply_projected_abliteration(model: Any, layers_mod, directions: dict,
@@ -449,6 +499,7 @@ def _apply_projected_abliteration(model: Any, layers_mod, directions: dict,
     direction against the harmless direction BEFORE projecting, so capabilities
     that overlap the refusal subspace are preserved. delta_W = -lambda * v (v^T W)
     with v = normalize(refusal - (refusal.good) good)."""
+    applied = candidate.setdefault("_applied", [])
     for layer_idx in candidate["target_layers"]:
         if layer_idx not in directions or layer_idx >= len(layers_mod):
             continue
@@ -461,14 +512,16 @@ def _apply_projected_abliteration(model: Any, layers_mod, directions: dict,
             d = d / d.norm().clamp(min=1e-8)
 
         for wname in candidate["target_weights"]:
-            if wname == "o_proj" and hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
-                w = layer.self_attn.o_proj.weight.data
+            for mod, w in _iter_resolved_projs(layer, wname):
+                w0 = w.clone()
+                before = float(w0.norm().item())
                 _project_2d(w, d.to(device=w.device), candidate["alpha"])
-            elif wname == "down_proj":
-                ff = getattr(layer, "mlp", None) or getattr(layer, "feed_forward", None)
-                if ff is not None and hasattr(ff, "down_proj"):
-                    w = ff.down_proj.weight.data
-                    _project_2d(w, d.to(device=w.device), candidate["alpha"])
+                applied.append({
+                    "layer": layer_idx, "weight": wname,
+                    "shape": list(w.shape),
+                    "rel_change": round(float((w0 - w).norm().item()) / max(before, 1e-12), 6),
+                    "norm_before": round(before, 4), "norm_after": round(float(w.norm().item()), 4),
+                })
 
 
 def _apply_lora_abliteration(model: Any, layers_mod, directions: dict,
@@ -478,6 +531,7 @@ def _apply_lora_abliteration(model: Any, layers_mod, directions: dict,
     lora_A = v^T W, lora_B = -lambda * v. We store the delta and apply it to
     the weight in place (the sweep restores pristine between candidates, so
     this is equivalent but keeps the adapter math)."""
+    applied = candidate.setdefault("_applied", [])
     for layer_idx in candidate["target_layers"]:
         if layer_idx not in directions or layer_idx >= len(layers_mod):
             continue
@@ -485,20 +539,24 @@ def _apply_lora_abliteration(model: Any, layers_mod, directions: dict,
         v = _as_1d(directions[layer_idx]).to(torch.float32)
         v = v / v.norm().clamp(min=1e-8)
         for wname in candidate["target_weights"]:
-            if wname == "o_proj" and hasattr(layer, "self_attn") and hasattr(layer.self_attn, "o_proj"):
-                w = layer.self_attn.o_proj.weight.data
+            for mod, w in _iter_resolved_projs(layer, wname):
+                w0 = w.clone()
+                before = float(w0.norm().item())
                 _apply_lora_delta(w, v, candidate["alpha"])
-            elif wname == "down_proj":
-                ff = getattr(layer, "mlp", None) or getattr(layer, "feed_forward", None)
-                if ff is not None and hasattr(ff, "down_proj"):
-                    w = ff.down_proj.weight.data
-                    _apply_lora_delta(w, v, candidate["alpha"])
+                applied.append({
+                    "layer": layer_idx, "weight": wname,
+                    "shape": list(w.shape),
+                    "rel_change": round(float((w0 - w).norm().item()) / max(before, 1e-12), 6),
+                    "norm_before": round(before, 4), "norm_after": round(float(w.norm().item()), 4),
+                })
 
 
 def _apply_lora_delta(w: torch.Tensor, v: torch.Tensor, alpha: float) -> None:
     """W += lora_B @ lora_A = (-alpha * v) @ (v^T W)  (rank-1 LoRA ablation)."""
-    if w.dim() != 2 or v.shape[0] != w.shape[1]:
-        # Hybrid archs (LFM conv layers) expose non-square weights; skip.
+    if w.dim() != 2 or v.shape[0] != w.shape[0]:
+        # v is in the OUTPUT space of W (W[out, in]); LoRA_A = v^T W is
+        # [1, in]. The old check compared the INPUT dim — it skipped every
+        # non-square weight (LFM2.5 ffn w2 is [2048, 8192]).
         return
     W = w.to(torch.float32)
     lora_A = (v @ W).view(1, -1)          # [1, in]
@@ -645,6 +703,15 @@ def _apply_candidate(model: Any, directions: dict, pristine: dict | None,
     # after a steering one doesn't carry stale hooks.
     if method != "steering":
         _clear_steering_hooks()
+    # Zero-match hard check (mirrors cmd_abl): a candidate whose weights
+    # resolve on NO target layer (bad name, zero direction coverage) must
+    # never pass as a silent no-op.
+    if method != "steering" and not candidate.get("_applied"):
+        logger.warning(
+            "SWEEP: candidate method=%s layers=%s weights=%s projected ZERO "
+            "weights (no-op) — check weight names and direction coverage.",
+            method, candidate["target_layers"], candidate["target_weights"],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -808,10 +875,6 @@ def sweep_node(state: AbliterationState) -> dict[str, Any]:
     if len(filtered) != len(grid):
         logger.info("SWEEP: dropped %d candidate(s) with unavailable dir_method", len(grid) - len(filtered))
     grid = filtered
-    dropped = len(set(tuple(c["target_layers"]) for c in
-                      _build_candidates(cfg))) - len(set(tuple(c["target_layers"]) for c in grid))
-    if dropped > 0:
-        logger.info("SWEEP: dropped %d layer set(s) containing conv layers (hybrid arch)", dropped)
     logger.info("SWEEP: %d candidates (%d methods × %d dir_methods × %d layer sets × %d alphas × %d passes)",
                 len(grid),
                 len(set(c["method"] for c in grid)),

@@ -62,6 +62,16 @@ def _slug(model_id: str) -> str:
     return model_id.replace("/", "-").lower()
 
 
+def _campaign_root() -> Path:
+    """Campaigns root for artifacts (model dirs, bundles, directions).
+
+    ``ABSOLVER_CAMPAIGNS_ROOT`` overrides it — the Modal harness runners
+    point this at a mounted Volume so artifacts written in the ephemeral
+    container survive and can be pulled back locally.
+    """
+    return Path(os.environ.get("ABSOLVER_CAMPAIGNS_ROOT", PROJECT_DIR / "campaigns"))
+
+
 def _load_cfg(config_path: str):
     from config import load_config
     return load_config(config_path)
@@ -135,29 +145,44 @@ def cmd_inspect(config_path: str) -> int:
     # The model's OWN layer_types list (LFM2.x ships it, e.g.
     # ['conv', 'conv', ..., 'full_attention', ...]) — shows conv-vs-
     # attention at a glance without module introspection (TOOLKIT-FEEDBACK
-    # §3.6). Conv layers must NEVER be projected.
+    # §3.6). Attention blocks project self_attn.out_proj; conv blocks
+    # project conv.out_proj (2D Linear) — all layers are projectable.
     lt = getattr(getattr(model, "config", None), "layer_types", None)
     if lt:
         print(f"layer_types ({len(lt)}): {lt}")
         print("  per-layer: " + ", ".join(
             f"L{i}={t}" for i, t in enumerate(lt[: num_layers * 2])))
-        non_conv = [i for i, t in enumerate(lt[:num_layers]) if "conv" not in str(t).lower()]
-        if non_conv:
-            print(f"  projectable (non-conv): {non_conv}")
+        attn_idxs = [i for i, t in enumerate(lt[:num_layers]) if "attn" in str(t).lower()]
+        if attn_idxs:
+            print(f"  full-attention layers: {attn_idxs} (attn out_proj); "
+                  f"conv layers project conv.out_proj — not filtered out")
 
     # Bias / weight-shape audit — catches silent-skip landmines.
-    # Resolution is alias-aware (o_proj|out_proj, down_proj|w2) so LFM2.5
-    # naming is audited properly instead of printing MISSING everywhere.
+    # Resolution is alias-aware (o_proj|out_proj, conv out_proj, down_proj|w2)
+    # so LFM2.5 naming is audited properly instead of printing MISSING
+    # everywhere. THE RULE (hard-won, forensics 2026-09-02): every
+    # out-projection whose OUTPUT dim is the hidden space is projectable —
+    # attn out_proj, conv out_proj (WHEN 2D square; the Conv1d and in_proj
+    # are not), and ffn w2 (non-square on LFM2.5, output dim = hidden, still
+    # projectable). "Conv must never be projected" was WRONG for this
+    # hybrid — huihui's published abliteration projects all 10 conv out_projs.
     print("\n--- weight audit (silent-skip landmines) ---")
     from sweep import _resolve_proj
     attention_layers, conv_layers = [], []
     for li in {0, num_layers // 2, num_layers - 1}:
         layer = layers[li]
-        for wname in ("o_proj", "down_proj"):
+        for wname in ("o_proj", "conv_out", "w2"):
             mods = _resolve_proj(layer, wname)
             if not mods:
                 conv = getattr(layer, "conv", None)
-                extra = " (conv block — must NEVER be projected)" if conv is not None else ""
+                extra = ""
+                if conv is not None and wname == "conv_out":
+                    op = getattr(conv, "out_proj", None)
+                    if op is None:
+                        extra = " (conv block has no out_proj Linear)"
+                    elif op.weight.dim() != 2 or op.weight.shape[0] != op.weight.shape[1]:
+                        extra = (f" (conv out_proj NOT 2D square: "
+                                 f"{tuple(op.weight.shape)} — not projectable)")
                 print(f"  L{li} {wname}: MISSING{extra}")
                 continue
             projs = mods if isinstance(mods, list) else [mods]
@@ -166,8 +191,9 @@ def cmd_inspect(config_path: str) -> int:
                 bias = getattr(mod, "bias", None)
                 print(f"  L{li} {wname}: W{tuple(w.shape)} bias={'yes' if bias is not None else 'NO'}")
                 if w.dim() == 2 and w.shape[0] != w.shape[1]:
-                    print(f"      ^ NON-SQUARE: output dim {w.shape[0]} != input {w.shape[1]}")
-                    print(f"        hidden-space directions ({hidden}) only fit output-dim==hidden weights")
+                    print(f"      ^ NON-SQUARE (out {w.shape[0]} != in {w.shape[1]}) — still "
+                          f"projectable: projection is OUTPUT-space, d must equal out dim {w.shape[0]}")
+                    print(f"        hidden ({hidden}) == out dim -> OK; hidden != {w.shape[0]} -> skip")
                 elif w.dim() != 2:
                     print(f"      ^ NON-2D ({w.dim()}D) — hidden-space directions do not apply")
     for li in range(num_layers):
@@ -177,28 +203,43 @@ def cmd_inspect(config_path: str) -> int:
         if _resolve_proj(layer, "o_proj") is not None:
             attention_layers.append(li)
     print(f"  summary: {len(attention_layers)} attention-out layers {attention_layers}, "
-          f"{len(conv_layers)} conv layers {conv_layers} (conv must never be projected)")
+          f"{len(conv_layers)} conv layers {conv_layers}")
+    # huihui-validated coverage counter: attn out_proj + conv out_proj + w2.
+    n_out = sum(
+        1 for li in range(num_layers)
+        for wn in ("o_proj", "conv_out", "w2")
+        if _resolve_proj(layers[li], wn) is not None
+    )
+    print(f"  out-projection coverage (o_proj + conv_out + w2 over all layers): {n_out} resolved")
+    print("  rule: LFM2.5-hybrid — refusal spans ALL out-projections (attn out_proj x6 +")
+    print("        conv out_proj x10 + ffn w2 x16 = 32). Coverage > magnitude. Conv.out_proj")
+    print("        is a 2D hidden Linear and IS projectable — never blanket-exclude a")
+    print("        projection class without a per-arch shape check.")
 
     # Per-layer projection profile — answers "which layers can accept a
     # hidden-space direction edit" without any forward pass.
-    print("\n--- layer profile (attn-out / conv / mlp-out per block) ---")
+    print("\n--- layer profile (attn-out / conv-out / w2 per block) ---")
     for li in range(num_layers):
         conv = getattr(layers[li], "conv", None)
         ap = _resolve_proj(layers[li], "o_proj")
-        dp = _resolve_proj(layers[li], "down_proj")
+        co = _resolve_proj(layers[li], "conv_out")
+        dp = _resolve_proj(layers[li], "w2")
         bits = []
         if ap is not None:
             bits.append(f"attn-out:{tuple(ap.weight.shape)}")
         elif conv is not None:
-            # conv blocks differ by arch: LFM2.5 exposes Conv1d as
-            # conv.conv.weight (3D) + in_proj/out_proj Linears.
-            cw = getattr(getattr(conv, "conv", None), "weight", None)
-            if cw is None:
-                cw = getattr(conv, "weight", None)
-            bits.append(f"CONV:{tuple(cw.shape)}" if cw is not None else f"CONV:{type(conv).__name__}")
+            if co is not None:
+                bits.append(f"conv-out:{tuple(co.weight.shape)}")
+            else:
+                # conv blocks differ by arch: LFM2.5 exposes Conv1d as
+                # conv.conv.weight (3D) + in_proj/out_proj Linears.
+                cw = getattr(getattr(conv, "conv", None), "weight", None)
+                if cw is None:
+                    cw = getattr(conv, "weight", None)
+                bits.append(f"CONV:{tuple(cw.shape)}" if cw is not None else f"CONV:{type(conv).__name__}")
         else:
             bits.append("no-attn-out")
-        bits.append(f"mlp:{tuple(dp.weight.shape)}" if dp is not None else "mlp:MISSING")
+        bits.append(f"w2:{tuple(dp.weight.shape)}" if dp is not None else "w2:MISSING")
         print(f"  L{li:2d}: " + " | ".join(bits))
 
     # Quick direction separation profile (10 prompts each side)
@@ -298,7 +339,7 @@ def cmd_directions(config_path: str, n_prompts: int | None, flavor: str | None,
     print(f"Directions collected on {len(dirs)}/{num_layers} layers "
           f"(dir_method={dm}, probe={probe_mode}, flavor={flavor})")
 
-    out_dir = PROJECT_DIR / "campaigns" / _slug(cfg.model_id)
+    out_dir = _campaign_root() / _slug(cfg.model_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"directions-{flavor}.pt"
     torch.save({"dirs": {str(k): v.cpu() for k, v in dirs.items()},
@@ -427,7 +468,7 @@ def cmd_abl(config_path: str, method: str, alpha: float, layers_spec: str,
               f"norm {a['norm_before']:.3f} -> {a['norm_after']:.3f}")
 
     # save ablated model
-    out_dir = PROJECT_DIR / "campaigns" / _slug(cfg.model_id) / (out_tag or f"abl-{method}-a{alpha}")
+    out_dir = _campaign_root() / _slug(cfg.model_id) / (out_tag or f"abl-{method}-a{alpha}")
     out_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(str(out_dir))
     tok.save_pretrained(str(out_dir))
@@ -598,7 +639,7 @@ def cmd_collect(config_path: str, model_dir: str | None, transcript: bool,
 
     # bundle keyed by eval target so pristine + ablated bundles coexist
     tag = "pristine" if not model_dir else Path(model_dir).name
-    out_dir = PROJECT_DIR / "campaigns" / _slug(cfg.model_id) / f"collect-{tag}"
+    out_dir = _campaign_root() / _slug(cfg.model_id) / f"collect-{tag}"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "bundle.json"
     (out_dir / "bundle.json").write_text(json.dumps(out, indent=2, default=str), encoding="utf-8")
@@ -801,7 +842,7 @@ def cmd_steer_test(config_path: str, alphas_spec: str, n_directions: int | None,
         print(f"    {entry['response']}")
 
     # evidence trail
-    out_dir = PROJECT_DIR / "campaigns" / _slug(cfg.model_id)
+    out_dir = _campaign_root() / _slug(cfg.model_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"steer-test-{time.strftime('%Y%m%d-%H%M%S')}.json"
     (out_dir / path.name).write_text(json.dumps({
@@ -822,7 +863,7 @@ def cmd_steer_test(config_path: str, alphas_spec: str, n_directions: int | None,
 
 def cmd_list_campaigns() -> int:
     import yaml
-    base = PROJECT_DIR / "campaigns"
+    base = _campaign_root()
     if not base.exists():
         print("no campaigns dir")
         return 0
