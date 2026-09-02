@@ -1,0 +1,391 @@
+{
+  "model_id": "LiquidAI/LFM2.5-1.2B-Instruct",
+  "method": "mpoa",
+  "dir_method": "paired",
+  "probe_mode": "paired",
+  "prefill": "Sure, I can help with that.",
+  "flavor": "chat",
+  "from_directions": "/absolver/phase2-staging/directions-chat.pt",
+  "alpha": 1.5,
+  "passes": 1,
+  "layers": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+  ],
+  "weights": [
+    "o_proj",
+    "conv_out",
+    "w2"
+  ],
+  "n_probe_prompts": 10,
+  "weight_changes": [
+    {
+      "layer": 0,
+      "weight": "conv_out",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rel_change": 0.060022,
+      "norm_before": 28.375,
+      "norm_after": 28.375
+    },
+    {
+      "layer": 0,
+      "weight": "w2",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rel_change": 0.041283,
+      "norm_before": 47.5,
+      "norm_after": 47.5
+    },
+    {
+      "layer": 1,
+      "weight": "conv_out",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rel_change": 0.037556,
+      "norm_before": 27.875,
+      "norm_after": 27.875
+    },
+    {
+      "layer": 1,
+      "weight": "w2",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rel_change": 0.033953,
+      "norm_before": 46.25,
+      "norm_after": 46.25
+    },
+    {
+      "layer": 2,
+      "weight": "o_proj",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rel_change": 0.052025,
+      "norm_before": 22.375,
+      "norm_after": 22.375
+    },
+    {
+      "layer": 2,
+      "weight": "w2",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rel_change": 0.053073,
+      "norm_before": 44.75,
+      "norm_after": 44.75
+    },
+    {
+      "layer": 3,
+      "weight": "conv_out",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rel_change": 0.107981,
+      "norm_before": 26.625,
+      "norm_after": 26.625
+    },
+    {
+      "layer": 3,
+      "weight": "w2",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rel_change": 0.062849,
+      "norm_before": 44.75,
+      "norm_after": 44.75
+    },
+    {
+      "layer": 4,
+      "weight": "conv_out",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rel_change": 0.038372,
+      "norm_before": 26.875,
+      "norm_after": 26.875
+    },
+    {
+      "layer": 4,
+      "weight": "w2",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rel_change": 0.036084,
+      "norm_before": 45.25,
+      "norm_after": 45.25
+    },
+    {
+      "layer": 5,
+      "weight": "o_proj",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rel_change": 0.071772,
+      "norm_before": 22.75,
+      "norm_after": 22.75
+    },
+    {
+      "layer": 5,
+      "weight": "w2",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rel_change": 0.056108,
+      "norm_before": 44.0,
+      "norm_after": 44.0
+    },
+    {
+      "layer": 6,
+      "weight": "conv_out",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rel_change": 0.073756,
+      "norm_before": 26.375,
+      "norm_after": 26.375
+    },
+    {
+      "layer": 6,
+      "weight": "w2",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rel_change": 0.04661,
+      "norm_before": 44.25,
+      "norm_after": 44.25
+    },
+    {
+      "layer": 7,
+      "weight": "conv_out",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rel_change": 0.04965,
+      "norm_before": 26.75,
+      "norm_after": 26.75
+    },
+    {
+      "layer": 7,
+      "weight": "w2",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rel_change": 0.043296,
+      "norm_before": 44.75,
+      "norm_after": 44.75
+    },
+    {
+      "layer": 8,
+      "weight": "o_proj",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rel_change": 0.056386,
+      "norm_before": 23.0,
+      "norm_after": 23.0
+    },
+    {
+      "layer": 8,
+      "weight": "w2",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rel_change": 0.04661,
+      "norm_before": 44.25,
+      "norm_after": 44.5
+    },
+    {
+      "layer": 9,
+      "weight": "conv_out",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rel_change": 0.04658,
+      "norm_before": 26.5,
+      "norm_after": 26.5
+    },
+    {
+      "layer": 9,
+      "weight": "w2",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rel_change": 0.03995,
+      "norm_before": 44.0,
+      "norm_after": 44.0
+    },
+    {
+      "layer": 10,
+      "weight": "o_proj",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rel_change": 0.039626,
+      "norm_before": 24.25,
+      "norm_after": 24.25
+    },
+    {
+      "layer": 10,
+      "weight": "w2",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rel_change": 0.035022,
+      "norm_before": 43.5,
+      "norm_after": 43.5
+    },
+    {
+      "layer": 11,
+      "weight": "conv_out",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rel_change": 0.044034,
+      "norm_before": 27.5,
+      "norm_after": 27.5
+    },
+    {
+      "layer": 11,
+      "weight": "w2",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rel_change": 0.036222,
+      "norm_before": 44.0,
+      "norm_after": 44.0
+    },
+    {
+      "layer": 12,
+      "weight": "o_proj",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rel_change": 0.037283,
+      "norm_before": 25.25,
+      "norm_after": 25.25
+    },
+    {
+      "layer": 12,
+      "weight": "w2",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rel_change": 0.032679,
+      "norm_before": 43.75,
+      "norm_after": 43.75
+    },
+    {
+      "layer": 13,
+      "weight": "conv_out",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rel_change": 0.038859,
+      "norm_before": 28.75,
+      "norm_after": 28.75
+    },
+    {
+      "layer": 13,
+      "weight": "w2",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rel_change": 0.034007,
+      "norm_before": 42.5,
+      "norm_after": 42.5
+    },
+    {
+      "layer": 14,
+      "weight": "o_proj",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rel_change": 0.03587,
+      "norm_before": 28.75,
+      "norm_after": 28.75
+    },
+    {
+      "layer": 14,
+      "weight": "w2",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rel_change": 0.029523,
+      "norm_before": 45.25,
+      "norm_after": 45.25
+    },
+    {
+      "layer": 15,
+      "weight": "conv_out",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rel_change": 0.035826,
+      "norm_before": 29.875,
+      "norm_after": 29.875
+    },
+    {
+      "layer": 15,
+      "weight": "w2",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rel_change": 0.032631,
+      "norm_before": 45.25,
+      "norm_after": 45.25
+    }
+  ],
+  "config": "models/lfm2.5-1.2b-instruct.yaml",
+  "time": "2026-09-02 13:03:20"
+}

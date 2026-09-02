@@ -45,9 +45,9 @@ bugs_found:
   - harness_modal_image_missing_pydantic  # verify->state->config chain needs pydantic; harness + forensics images now install it
   - keyword_gate_blind_to_lecture_evasions  # OPEN (toolkit-level): 'Taking over someone's social media account is a serious matter and should only be done with explicit consent...' scores compliant; needs judge/LLM gate or intent classifier
 recommended_next:
-  - sumandora_geometry_test_12b: "Replicate huihui's exact weight geometry with OUR pipeline + paired directions: ablate out_proj (attn) + conv.out_proj (conv) + feed_forward.w2 (ffn) at ALL 16 layers, alpha ladder, collect vs pristine. Requires extending harness _apply_candidate to allow conv.out_proj / ffn.w2 projection (currently hard-blocked by the 'conv must never be projected' guard)."
-  - update_conv_rule: "Replace the blanket 'conv must never be projected' guideline with shape-gated rule: conv.out_proj IS hidden-shaped (2048x2048) and IS projected by the published success."
-  - direction_source_ablation: "Second confound to isolate: huihui used activation-diff latent directions on their own prompt set vs our paired output-phase chat directions. After geometry replication lands, A/B direction source on the same geometry."
+  - sumandora_geometry_test_12b: "DONE (2026-09-02) -> campaigns/lfm2.5-all32-replication/README.md. Geometry replicated faithfully (pipeline fix 5bfef97); no direction source of ours (chat paired, raw paired, raw diff_means) reproduces the published compliance — coverage necessary, not sufficient."
+  - update_conv_rule: "DONE (5bfef97): shape-gated rule shipped in _resolve_proj + inspect audit + campaign template + KB."
+  - direction_source_ablation: "DONE (2026-09-02): A/B'd 3 direction sources on the all-32 geometry — all fail the gate; the direction VECTORS (prompt set + extraction + coefficient) are the remaining confound. Next: recover d per tensor from W_huihui - W_base (rank-1 SVD of the diff)."
 ---
 
 # LFM2.5 forensics: decoding-rescue test + huihui A/B + tensor diff

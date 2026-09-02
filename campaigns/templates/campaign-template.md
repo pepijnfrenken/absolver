@@ -54,6 +54,20 @@ test that reframed it, the geometry/measurement insight.>
 
 ---
 
+## Hard-won rules (read before designing a config)
+
+- **LFM2.5-hybrid: refusal spans ALL out-projections** (attn `out_proj` ×6,
+  conv `out_proj` ×10, ffn `w2` ×16 = 32). Coverage > magnitude — huihui's
+  published abliteration projects all 32 at rel_l2 0.022-0.030 and passes at
+  default greedy; a 6-attention-only edit at 2× strength still refuses.
+  `conv.out_proj` is a 2D hidden Linear and IS projectable — never
+  blanket-exclude a projection class without a per-arch shape check.
+- **Projection direction space is the OUTPUT space**: W[out, in] -= d(d^T W)
+  needs d.shape[0] == out. ffn `w2` is [hidden, inter] (non-square on
+  LFM2.5, measured [2048, 8192]) and still projects. Resolver weight names:
+  `o_proj` (attn), `conv_out` (conv block, 2D-square gated), `w2`/`ffn_out`
+  (ffn). Run `inspect` — it prints the resolved-coverage count.
+
 ## Template notes
 - The YAML frontmatter is the MACHINE-READABLE part — keep every field
   filled so `harness/` scripts can mine correlations across campaigns.
