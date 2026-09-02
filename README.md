@@ -98,6 +98,18 @@ campaigns accumulate. See `campaigns/README.md` and
 
 ## History
 
+- **2026-09-02 (evening)** — **First POSITIVE campaign + published model.**
+  `campaigns/lfm2.5-recovery/` recovered huihui's direction vectors from her
+  published edit (`W_huihui − W_base` per tensor is rank-1, mean energy share
+  0.994; the top left-singular vector is the shared per-layer direction) and
+  re-applied them exactly (`W' = W + σ₁·u₁·v₁ᵀ`) on a fresh base — fingerprint
+  rel_l2 0.0013–0.0023, refusal 0/5 with verbatim real compliance at default
+  greedy, PPL +5.8%, MMLU-mini retention 1.0. Published as
+  `PinoCookie/LFM2.5-1.2B-Instruct-Abliterated` (card:
+  `~/.omp/knowledge/red-team/model-card-lfm2.5-1.2b-instruct.md`). Resolved
+  the direction confound laid out by the all-32 campaign; the recipe (rank-1
+  SVD recovery) is documented in the KB method writeup
+  `01-abliteration/rank1-svd-recovery.md`.
 - **2026-09-02** — Toolkit pivot. The full-auto sweep loop was retired as
   the main path: it hid 6 silent bugs (down_proj never ablated, alpha>2
   sign-flip amplifier, PPL empty slice, bias_vectors no-op on bias-less

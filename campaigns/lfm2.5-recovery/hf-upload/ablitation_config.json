@@ -1,0 +1,42 @@
+{
+  "model_id": "LiquidAI/LFM2.5-1.2B-Instruct",
+  "abliterated_model_id": "PinoCookie/LFM2.5-1.2B-Instruct-Abliterated",
+  "method": "recovered",
+  "dir_method": "recovered-rank1-svd",
+  "probe_mode": "weights-svd",
+  "description": "Rank-1 SVD recovery of the published huihui-ai/Huihui-LFM2.5-1.2B-Instruct-abliterated edit. For each of the 32 changed out-projection tensors, delta = W_huihui - W_base is rank-1 (mean energy share 0.994, residual at the bf16 noise floor); the top LEFT-singular vector u1 is the shared per-layer refusal direction (within-layer |cos| 0.9907-0.9984 across the layer's out-projections); exact re-application W' = W + s1*u1*v1^T on a fresh base reproduces the published model at rel_l2 0.0013-0.0023 per tensor (bf16 noise floor).",
+  "reference_edit": "huihui-ai/Huihui-LFM2.5-1.2B-Instruct-abliterated",
+  "changed_tensors": 32,
+  "tensor_classes": {
+    "attn_o_proj": 6,
+    "conv_out_proj": 10,
+    "ffn_w2": 16
+  },
+  "layers": [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+  ],
+  "weights": [
+    "o_proj",
+    "conv_out",
+    "w2"
+  ],
+  "alpha": 1.0,
+  "passes": 1,
+  "rel_l2_per_tensor": "0.0217-0.0300 (mean 0.0240)",
+  "fingerprint_rel_l2_vs_reference": "0.0013-0.0023",
+  "gates": {
+    "refusal": "0/5 refused (real compliance, default greedy)",
+    "coherence": "5/5 coherent",
+    "degeneracy": "0.000 mean repetition",
+    "finite_logits": true,
+    "capability_retention": "1.0 (mmlu-mini-20: ablated 0.250 vs pristine 0.250)",
+    "perplexity_increase": "0.058 (+5.8% vs pristine)",
+    "first_token_kl": "3.0158 (by-construction fail vs 0.1 threshold; reference edit itself scores 5.8925 on the same quantity)"
+  },
+  "hardware": "Modal L4 (24 GB)",
+  "compute": "~0.15 GPU-hrs (recover + 2 abls + fingerprint + collect)",
+  "date": "2026-09-02",
+  "campaign": "campaigns/lfm2.5-recovery/ (absolver repo)",
+  "source_manifest": "campaigns/lfm2.5-recovery/recovered-r1/manifest.json",
+  "generation": "default decoding (do_sample=False) for all gate measurements"
+}
