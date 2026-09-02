@@ -75,6 +75,10 @@ def run_harness_cmd(argv: list[str]) -> dict:
     env["PYTHONPATH"] = "/absolver"
     env["ABSOLVER_CAMPAIGNS_ROOT"] = "/out"
     env.setdefault("HF_TOKEN", os.environ.get("HF_TOKEN", ""))
+    # keep progress bars out of the captured output budget so real
+    # tracebacks/evidence survive the 12k-char tail
+    env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+    env["TRANSFORMERS_VERBOSITY"] = "error"
 
     out = []
     overall_started = time.perf_counter()

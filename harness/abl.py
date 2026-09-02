@@ -258,18 +258,22 @@ def cmd_inspect(config_path: str) -> int:
     import torch
     from collections import defaultdict
     def collect(prompts):
+        from verify import _model_device
+        cdev = _model_device(model)
         store = defaultdict(list)
         handles = [layers[i].register_forward_hook(_make_hook(i, store))
                    for i in range(num_layers)]
         try:
             for p in prompts:
-                inp = tok(p, return_tensors="pt", truncation=True, max_length=128)
+                inp = tok(p, return_tensors="pt", truncation=True, max_length=128).to(cdev)
                 with torch.no_grad():
                     model(**inp)
         finally:
             for hh in handles:
-                try: hh.remove()
-                except Exception: pass
+                try:
+                    hh.remove()
+                except Exception:
+                    pass
         return dict(store)
     h = list(DEFAULT_HARMFUL)[:10]
     g = list(DEFAULT_HARMLESS)[:10]
@@ -305,12 +309,14 @@ def cmd_directions(config_path: str, n_prompts: int | None, flavor: str | None,
 
     from collections import defaultdict
     def collect(prompts):
+        from verify import _model_device
+        cdev = _model_device(model)
         store = defaultdict(list)
         handles = [layers[i].register_forward_hook(_make_hook(i, store))
                    for i in range(num_layers)]
         try:
             for p in prompts:
-                inp = tok(p, return_tensors="pt", truncation=True, max_length=128)
+                inp = tok(p, return_tensors="pt", truncation=True, max_length=128).to(cdev)
                 with torch.no_grad():
                     model(**inp)
         finally:
@@ -426,12 +432,14 @@ def cmd_abl(config_path: str, method: str, alpha: float, layers_spec: str,
         # Collect directions fresh (never reuse stale ones silently)
         from collections import defaultdict
         def collect(prompts):
+            from verify import _model_device
+            cdev = _model_device(model)
             store = defaultdict(list)
             handles = [layers[i].register_forward_hook(_make_hook(i, store))
                        for i in range(num_layers)]
             try:
                 for p in prompts:
-                    inp = tok(p, return_tensors="pt", truncation=True, max_length=128)
+                    inp = tok(p, return_tensors="pt", truncation=True, max_length=128).to(cdev)
                     with torch.no_grad():
                         model(**inp)
             finally:
@@ -745,11 +753,13 @@ def cmd_steer_test(config_path: str, alphas_spec: str, n_directions: int | None,
         from collections import defaultdict
         store_h, store_g = defaultdict(list), defaultdict(list)
         def _collect(prompts, store):
+            from verify import _model_device
+            cdev = _model_device(model)
             handles = [layers[i].register_forward_hook(_make_hook(i, store))
                        for i in range(num_layers)]
             try:
                 for p in prompts:
-                    inp = tok(p, return_tensors="pt", truncation=True, max_length=128)
+                    inp = tok(p, return_tensors="pt", truncation=True, max_length=128).to(cdev)
                     with torch.no_grad():
                         model(**inp)
             finally:
