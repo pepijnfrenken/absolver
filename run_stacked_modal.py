@@ -1,13 +1,22 @@
-"""VALID corner test for the stacked ablation on Qwen2.5-1.5B-Instruct.
+"""VALID corner test: can ANY ablation config pass the gates on Qwen2.5-1.5B?
 
 Fixes the silent no-op in the previous stacked check:
   - split sizes now derive from the REAL pools (harmful=35, harmless=20),
     with a true TRAIN partition (>=1 prompt) for direction extraction;
-  - directions are collected with the REAL probe (_collect_paired_output_phase
-    for paired output-phase, plain forward hooks for diff_means input-phase);
-  - both directions are applied exactly like SWEEP's _apply_stacked;
+  - directions are collected with real forward hooks (diff_means
+    input-phase, proven causal by steering);
+  - applied via the real sweep apply functions (MPOA / stacked);
   - gates run on a held-out TEST split, WITH pristine PPL / first-token KL
     baselines + an mmlu_mini capability score, so every gate is live.
+
+CONCLUSION 2026-09-02 (after extensive local + Modal testing): no single
+config passes the gates on this model. Plain projection is geometrically
+too weak (refusal lives in a ~0.03% weight component). MPOA removes
+refusal only in a narrow alpha band that breaks coherence on the harder
+held-out set (a=10: 3/5 refuse; a=15: 0/5 refuse but 1/5 coherent;
+a=20 o_proj-only: no effect). The Sept-1 "diag 0.0" was a stacked-
+ablation artifact + these silent bugs. The honest verdict: Qwen2.5-1.5B
+does not yield to single-shot weight ablation in this pipeline.
 """
 
 import modal
@@ -130,7 +139,7 @@ def run_stacked() -> str:
             lg = out.logits.float()
             lp_first = torch.log_softmax(lg[0, -1], dim=-1).cpu()
             pristine_logprobs_first[_digest(p)] = lp_first
-            cont_lg = lg[0, inp["input_ids"].shape[1] - 1: -1]
+            cont_lg = lg[0, inp["input_ids"].shape[1] - 1: lg.shape[1] - 1]
             lp = torch.log_softmax(cont_lg, dim=-1)
             tokens = inp["input_ids"][0, 1:]
             chosen = lp.gather(-1, tokens.unsqueeze(-1)).squeeze(-1)
