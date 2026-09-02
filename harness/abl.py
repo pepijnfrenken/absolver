@@ -407,10 +407,16 @@ def cmd_collect(config_path: str, model_dir: str | None) -> int:
     # silent pass they get with no baseline.
     pristine_logprobs: dict[str, float] = {}
     pristine_logprobs_first: dict[str, Any] = {}
+    pristine_benchmark_scores: dict[str, float] = {}
     if model_dir:
-        print("Collecting pristine baselines (PPL + first-token KL) on held-out prompts...")
+        print("Collecting pristine baselines (PPL + first-token KL + mmlu) on held-out prompts...")
         pmodel, ptok = _load_model_tok(cfg)
         try:
+            try:
+                pristine_benchmark_scores["mmlu"] = run_mmlu_mini(pmodel, ptok, n=20)
+                print(f"  pristine mmlu_mini: {pristine_benchmark_scores['mmlu']:.3f}")
+            except Exception as exc:
+                print(f"WARNING: pristine mmlu_mini failed: {exc}")
             hfmt = detect_prompt_format(ptok, getattr(cfg, "prompt_format", "auto"))
             for p in held_out:
                 formatted = format_prompt(ptok, p, hfmt)
@@ -420,11 +426,14 @@ def cmd_collect(config_path: str, model_dir: str | None) -> int:
                     out = pmodel(**inp)
                 lg = out.logits.float()
                 pristine_logprobs_first[_digest(p)] = torch.log_softmax(lg[0, -1], dim=-1).cpu()
-                # logits at position t predict token t+1; slice the final
-                # logit out so N-1 logits align with tokens[1:].
-                cont = lg[0, inp["input_ids"].shape[1] - 1: lg.shape[1] - 1]
+                # prompt-text PPL: logits[t] predict tokens[t+1], so
+                # logits[0:N-1] align with tokens[1:N]. ([N-1:N-1] is an
+                # empty slice on a plain forward — PPL over zero tokens.)
+                cont = lg[0, 0: lg.shape[1] - 1]
                 lp = torch.log_softmax(cont, dim=-1)
                 tokens = inp["input_ids"][0, 1:]
+                if cont.shape[0] != tokens.shape[0]:
+                    continue
                 chosen = lp.gather(-1, tokens.unsqueeze(-1)).squeeze(-1)
                 ppl = math.exp(-chosen.sum().item() / max(1, chosen.numel()))
                 pristine_logprobs[_digest(p)] = ppl
@@ -456,11 +465,12 @@ def cmd_collect(config_path: str, model_dir: str | None) -> int:
 
     report = run_gates(model, tok, cfg, prompts=held_out, benchmark_scores=benchmark_scores,
                        pristine_logprobs=pristine_logprobs or None,
-                       pristine_logprobs_first=pristine_logprobs_first or None)
+                       pristine_logprobs_first=pristine_logprobs_first or None,
+                       pristine_benchmark_scores=pristine_benchmark_scores or None)
     out = {"model_id": cfg.model_id if not model_dir else model_dir,
            "eval_target": "pristine" if not model_dir else Path(model_dir).name,
            "held_out_size": len(held_out), "benchmark_scores": benchmark_scores,
-           "pristine_baseline_for": ["perplexity_increase", "first_token_kl"] if model_dir else [],
+           "pristine_baseline_for": ["perplexity_increase", "first_token_kl", "capability"] if model_dir else [],
            "time": time.strftime("%Y-%m-%d %H:%M:%S")}
     for k, v in report.items():
         if k in ("_enabled", "eval_pass", "held_out_size"):

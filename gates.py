@@ -188,12 +188,18 @@ def gate_perplexity_increase(
         inp = tok(formatted, return_tensors="pt", truncation=True).to(dev)
         with torch.no_grad():
             out = model(**inp)
-        # per-token logprob of the continuation (prompt tokens excluded).
-        # Same empty-slice trap as verify.py: [N-1 : -1] is empty — end the
-        # slice at the last logit position (lg.shape[1]-1).
-        cont = out.logits[0, inp["input_ids"].shape[1] - 1: out.logits.shape[1] - 1]
+        # per-token logprob of the prompt text (logits at position t predict
+        # token t+1, so logits[0:N-1] align with tokens[1:N]). The previous
+        # "fix" used [N-1 : N-1] which is STILL an empty slice on a plain
+        # forward (logits length == input length) — PPL silently computed on
+        # zero tokens. This measures per-token PPL of the same input text in
+        # both models, which is exactly the E03-style distribution-shift
+        # comparison.
+        cont = out.logits[0, 0 : out.logits.shape[1] - 1]
         logp = torch.log_softmax(cont.float(), dim=-1)
         tokens = inp["input_ids"][0, 1:]
+        if cont.shape[0] != tokens.shape[0]:
+            continue  # ragged alignment; skip this prompt rather than lie
         chosen = logp.gather(-1, tokens.unsqueeze(-1)).squeeze(-1)
         ppl_abl = _perplexity_from_logprobs(chosen)
         inc = (ppl_abl / base_lp) - 1.0 if base_lp > 0 else 0.0
@@ -211,8 +217,16 @@ def _digest_prompt(p: str) -> str:
     return hashlib.sha256(p.encode("utf-8")).hexdigest()
 
 
-def gate_capability(model, tok, cfg, benchmark_scores: dict[str, float]) -> dict:
-    """Capability gate: best available benchmark score >= threshold."""
+def gate_capability(model, tok, cfg, benchmark_scores: dict[str, float],
+                    pristine_benchmark_scores: dict[str, float] | None = None) -> dict:
+    """Capability gate: benchmark retention vs the pristine model.
+
+    E03's 83% is a RETENTION figure (abliterated/pristine), not an absolute
+    score — absolute mini-benchmark scores (e.g. ~0.25 on a 20-sample
+    mmlu_mini) can never reach 0.83 and would make the gate permanently
+    unsatisfiable. When the pristine baseline score is available, the gate
+    compares retention; otherwise it falls back to the absolute threshold.
+    """
     if not benchmark_scores:
         return {
             "value": 0.0,
@@ -221,17 +235,22 @@ def gate_capability(model, tok, cfg, benchmark_scores: dict[str, float]) -> dict
         }
     # Prefer mmlu if present; else the max of whatever ran.
     if "mmlu" in benchmark_scores:
-        score = benchmark_scores["mmlu"]
-        name = "mmlu"
+        name, score = "mmlu", benchmark_scores["mmlu"]
     else:
         name, score = max(benchmark_scores.items(), key=lambda kv: kv[1])
     thr = getattr(cfg, "gate_capability_min", 0.83)
-    # mmlu_mini is a 0-1 fraction; E03's 83% is on a harder set — keep the
-    # configurable threshold but report the raw score.
+    if pristine_benchmark_scores and name in pristine_benchmark_scores:
+        base = pristine_benchmark_scores[name]
+        retention = (score / base) if base else 0.0
+        return {
+            "value": retention,
+            "passed": retention >= thr,
+            "detail": f"{name} retention {retention:.3f} (abl {score:.3f} vs pristine {base:.3f}, threshold {thr})",
+        }
     return {
         "value": score,
         "passed": score >= thr,
-        "detail": f"{name}={score:.3f} (threshold {thr})",
+        "detail": f"{name}={score:.3f} absolute (no pristine baseline; threshold {thr})",
     }
 
 
@@ -287,6 +306,7 @@ def run_gates(
     benchmark_scores: dict[str, float],
     pristine_logprobs: dict[str, float] | None = None,
     pristine_logprobs_first: dict[str, float] | None = None,
+    pristine_benchmark_scores: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Run all configured gates, return {gate_name: {passed, value, detail}, eval_pass}."""
     gates: dict[str, Any] = {}
@@ -294,7 +314,7 @@ def run_gates(
     gates["coherence"] = gate_coherence(model, tok, cfg, prompts)
     gates["degeneracy"] = gate_degeneracy(model, tok, cfg, prompts)
     gates["finite_logits"] = gate_finite_logits(model, tok, cfg, prompts)
-    gates["capability"] = gate_capability(model, tok, cfg, benchmark_scores)
+    gates["capability"] = gate_capability(model, tok, cfg, benchmark_scores, pristine_benchmark_scores)
     gates["perplexity_increase"] = gate_perplexity_increase(model, tok, cfg, prompts, pristine_logprobs)
     gates["first_token_kl"] = gate_first_token_kl(model, tok, cfg, prompts, pristine_logprobs_first)
 

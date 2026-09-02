@@ -1049,16 +1049,17 @@ def verify_node(state: AbliterationState) -> dict[str, Any]:
                         # first-token logprob vector (vocab-dim)
                         lp_first = _torch.log_softmax(lg[0, -1], dim=-1).cpu()
                         pristine_logprobs_first[_digest(p)] = lp_first
-                        # per-token PPL over the continuation: logits at
-                        # position t predict token t+1, so model logits span
-                        # positions 0..N-1 and predict tokens 1..N. Slice the
-                        # FINAL logit (predicting the token AFTER the prompt
-                        # last) OUT, leaving N-1 logits aligned to tokens[1:].
-                        # NB: [x : -1] is an EMPTY slice when x = N-1 (python
-                        # normalizes -1 to N-1) — must use [x : N-1].
-                        cont_lg = lg[0, inp["input_ids"].shape[1] - 1: lg.shape[1] - 1]
+                        # per-token PPL over the prompt text: logits at
+                        # position t predict token t+1, so logits[0:N-1]
+                        # align with tokens[1:N]. NB the previous fix's
+                        # [x : N-1] slice with x=N-1 is EMPTY on a plain
+                        # forward (logits length == input length) — PPL
+                        # silently computed on zero tokens. Use [0 : N-1].
+                        cont_lg = lg[0, 0: lg.shape[1] - 1]
                         lp = _torch.log_softmax(cont_lg, dim=-1)
                         tokens = inp["input_ids"][0, 1:]
+                        if cont_lg.shape[0] != tokens.shape[0]:
+                            continue
                         chosen = lp.gather(-1, tokens.unsqueeze(-1)).squeeze(-1)
                         ppl = math.exp(-chosen.sum().item() / max(1, chosen.numel()))
                         pristine_logprobs[_digest(p)] = ppl
