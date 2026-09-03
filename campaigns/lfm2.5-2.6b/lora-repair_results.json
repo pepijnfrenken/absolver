@@ -1,0 +1,92 @@
+{
+  "model_id": "LiquidAI/LFM2.5-2.6B",
+  "alpha": 1.5,
+  "method": "input-phase actdiff + MPOA a1.5 + LoRA repair",
+  "ranks": [
+    16,
+    32,
+    64
+  ],
+  "lrs": [
+    2e-05,
+    5e-05,
+    0.0001
+  ],
+  "epochs": 3,
+  "dataset": {
+    "prompts": 88,
+    "examples": 212
+  },
+  "pristine": {
+    "mmlu40": 0.3
+  },
+  "baseline_a15": {
+    "refusal_rate": 0.01818181818181818,
+    "refusal_n": 1,
+    "refusal_total": 55,
+    "ppl_increase": 0.39647945166149284,
+    "ppl_passed": false,
+    "coherence": 1.0,
+    "degeneracy": 0.0,
+    "finite": true,
+    "first_token_kl": 3.9310715794563293,
+    "mmlu40": 0.35
+  },
+  "candidates": [
+    {
+      "name": "repair-r16-lr2e-05",
+      "rank": 16,
+      "lr": 2e-05,
+      "train_failed": "stack expects each tensor to be equal size, but got [116] at entry 0 and [115] at entry 1"
+    },
+    {
+      "name": "repair-r16-lr5e-05",
+      "rank": 16,
+      "lr": 5e-05,
+      "train_failed": "stack expects each tensor to be equal size, but got [121] at entry 0 and [116] at entry 1"
+    },
+    {
+      "name": "repair-r16-lr0.0001",
+      "rank": 16,
+      "lr": 0.0001,
+      "train_failed": "stack expects each tensor to be equal size, but got [118] at entry 0 and [115] at entry 1"
+    },
+    {
+      "name": "repair-r32-lr2e-05",
+      "rank": 32,
+      "lr": 2e-05,
+      "train_failed": "stack expects each tensor to be equal size, but got [119] at entry 0 and [116] at entry 1"
+    },
+    {
+      "name": "repair-r32-lr5e-05",
+      "rank": 32,
+      "lr": 5e-05,
+      "train_failed": "stack expects each tensor to be equal size, but got [114] at entry 0 and [115] at entry 2"
+    },
+    {
+      "name": "repair-r32-lr0.0001",
+      "rank": 32,
+      "lr": 0.0001,
+      "train_failed": "stack expects each tensor to be equal size, but got [116] at entry 0 and [114] at entry 2"
+    },
+    {
+      "name": "repair-r64-lr2e-05",
+      "rank": 64,
+      "lr": 2e-05,
+      "train_failed": "stack expects each tensor to be equal size, but got [115] at entry 0 and [112] at entry 2"
+    },
+    {
+      "name": "repair-r64-lr5e-05",
+      "rank": 64,
+      "lr": 5e-05,
+      "train_failed": "stack expects each tensor to be equal size, but got [112] at entry 0 and [118] at entry 1"
+    },
+    {
+      "name": "repair-r64-lr0.0001",
+      "rank": 64,
+      "lr": 0.0001,
+      "train_failed": "stack expects each tensor to be equal size, but got [114] at entry 0 and [112] at entry 1"
+    }
+  ],
+  "saved": []
+}

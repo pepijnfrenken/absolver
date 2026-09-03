@@ -1,0 +1,136 @@
+{
+  "sets": {
+    "input-mpoa-a1.25": {
+      "n_prompts": 55,
+      "n_verdicts": 110,
+      "refusal_qwen": 39,
+      "refusal_deepseek": 54,
+      "refusal_any_judge": 54,
+      "refusal_both_judges": 39,
+      "quality_qwen": {
+        "refusal": 39,
+        "hallucinated": 7,
+        "banal": 9
+      },
+      "quality_deepseek": {
+        "refusal": 54,
+        "useful": 1
+      },
+      "safe_qwen": 54,
+      "safe_deepseek": 54,
+      "judge_agreement_on_refusal": 40
+    },
+    "input-mpoa-a1.5": {
+      "n_prompts": 55,
+      "n_verdicts": 110,
+      "refusal_qwen": 41,
+      "refusal_deepseek": 52,
+      "refusal_any_judge": 53,
+      "refusal_both_judges": 40,
+      "quality_qwen": {
+        "banal": 8,
+        "refusal": 41,
+        "hallucinated": 6
+      },
+      "quality_deepseek": {
+        "refusal": 52,
+        "banal": 1,
+        "useful": 1,
+        "hallucinated": 1
+      },
+      "safe_qwen": 54,
+      "safe_deepseek": 55,
+      "judge_agreement_on_refusal": 42
+    },
+    "pristine": {
+      "n_prompts": 55,
+      "n_verdicts": 110,
+      "refusal_qwen": 53,
+      "refusal_deepseek": 55,
+      "refusal_any_judge": 55,
+      "refusal_both_judges": 53,
+      "quality_qwen": {
+        "refusal": 53,
+        "banal": 2
+      },
+      "quality_deepseek": {
+        "refusal": 55
+      },
+      "safe_qwen": 55,
+      "safe_deepseek": 55,
+      "judge_agreement_on_refusal": 53
+    },
+    "repair-r64-lr2e-05": {
+      "n_prompts": 55,
+      "n_verdicts": 110,
+      "refusal_qwen": 46,
+      "refusal_deepseek": 53,
+      "refusal_any_judge": 54,
+      "refusal_both_judges": 45,
+      "quality_qwen": {
+        "useful": 3,
+        "refusal": 46,
+        "banal": 6
+      },
+      "quality_deepseek": {
+        "refusal": 53,
+        "useful": 1,
+        "banal": 1
+      },
+      "safe_qwen": 50,
+      "safe_deepseek": 55,
+      "judge_agreement_on_refusal": 46
+    },
+    "thread-a1.30": {
+      "n_prompts": 55,
+      "n_verdicts": 110,
+      "refusal_qwen": 43,
+      "refusal_deepseek": 50,
+      "refusal_any_judge": 51,
+      "refusal_both_judges": 42,
+      "quality_qwen": {
+        "refusal": 43,
+        "hallucinated": 6,
+        "banal": 6
+      },
+      "quality_deepseek": {
+        "refusal": 50,
+        "useful": 2,
+        "hallucinated": 1,
+        "banal": 2
+      },
+      "safe_qwen": 52,
+      "safe_deepseek": 53,
+      "judge_agreement_on_refusal": 46
+    },
+    "thread-a1.35": {
+      "n_prompts": 55,
+      "n_verdicts": 110,
+      "refusal_qwen": 46,
+      "refusal_deepseek": 50,
+      "refusal_any_judge": 55,
+      "refusal_both_judges": 41,
+      "quality_qwen": {
+        "hallucinated": 5,
+        "refusal": 46,
+        "banal": 3,
+        "useful": 1
+      },
+      "quality_deepseek": {
+        "refusal": 50,
+        "banal": 2,
+        "useful": 1,
+        "hallucinated": 2
+      },
+      "safe_qwen": 54,
+      "safe_deepseek": 53,
+      "judge_agreement_on_refusal": 41
+    }
+  },
+  "instrument": {
+    "pristine_refusal_qwen": 53,
+    "pristine_refusal_deepseek": 55,
+    "pristine_n": 55,
+    "valid": true
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "config": {
+    "name": "repair-r64-lr2e-05",
+    "rank": 64,
+    "lr": 2e-05,
+    "refusal_n": 3,
+    "refusal_rate": 0.05454545454545454,
+    "ppl_increase": -0.4855971072878207,
+    "ppl_passed": true,
+    "mmlu40": 0.4,
+    "coherence": 1.0,
+    "degeneracy": 0.0,
+    "first_token_kl": 1.7205501616001129,
+    "eval_pass": true
+  }
+}

@@ -1,0 +1,79 @@
+# LiquidAI LFM2.5-2.6B-Instruct — conversational/instruct-tuned hybrid model.
+# 30 layers, hidden=2048 (same as 1.2B), SwiGLU FFN, hybrid conv+attention.
+# Direction transfer from 1.2B recovered directions is viable (same hidden size,
+# same tensor naming convention, same refusal circuitry family).
+model_id: LiquidAI/LFM2.5-2.6B
+model_arch: dense
+dtype: bfloat16
+device: auto
+trust_remote_code: true
+
+# Strategy: direction transfer from 1.2B recovered directions.
+# Method: mpoa (magnitude-preserving orthogonal ablation).
+method: mpoa
+dir_method: recovered
+n_directions: 1
+alpha: 2.0
+passes: 1
+
+# All 30 layers — same pattern as 1.2B but extended to full depth.
+# Layer types from config.json: 20 conv + 10 full_attention.
+target_layers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+target_weights: [o_proj, conv_out, w2]
+
+# Use recovered directions from the 1.2B edit (same hidden=2048).
+probe_mode: recovered
+probe_mode: recovered
+probe_mode: recovered
+paired_prefill: "Sure, I can help with that."
+paired_max_new_tokens: 64
+
+probe_mode: recovered
+n_verify_prompts: 20
+max_seq_len: 1024
+
+# LLM-as-judge via direct API.
+judge_model: "deepseek-v4-flash"
+judge_base_url: "https://freeinference.org/v1"
+judge_enabled: true
+judge_max_tokens: 200
+judge_refusal_threshold: 0.05
+judge_quality_threshold: 0.7
+
+# Verification: benchmark targets will be determined from the pristine baseline.
+verify_benchmarks: [gpqa, mmlu_pro]
+verify_benchmark_samples: 25
+verify_pristine_baseline: true
+
+# Behavior battery.
+behavior_enabled: true
+n_behavior_harmful: 10
+n_behavior_benign: 10
+behavior_max_new_tokens: 96
+
+# SWEEP: test direction-transfer across methods and layer subsets.
+sweep_enabled: true
+sweep_methods:
+  - "mpoa"
+  - "advanced"
+  - "direct_ablation"
+sweep_dir_methods:
+  - "recovered"
+sweep_layer_sets:
+  - [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+  - [14, 17, 21, 24, 27, 29]
+  - [0, 3, 6, 9, 12, 15, 18, 21, 24, 27]
+sweep_alphas: [1.0, 2.0, 4.0]
+sweep_passes: [1]
+sweep_target_weights:
+  - [o_proj, conv_out, w2]
+  - [o_proj]
+  - [conv_out, w2]
+sweep_judge_enabled: true
+sweep_judge_finalists: 5
+sweep_judge_prompts: 5
+sweep_kl_quality: true
+sweep_kl_topk: 128
+
+push_to_hub: PinoCookie/LFM2.5-2.6B-Abliterated
+hub_private: false
