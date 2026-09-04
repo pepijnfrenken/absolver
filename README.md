@@ -158,3 +158,9 @@ lineages).
 - **Dual-use note**: the repository contains transcripts of model outputs to
   safety prompts as experimental evidence. They are kept as data, not as
   exploit material.
+
+## License
+
+**PolyForm Noncommercial License 1.0.0** — full open source for
+non-commercial use (view, fork, modify, study, learn, share), but **no
+commercial use** without permission. See [LICENSE](LICENSE).
