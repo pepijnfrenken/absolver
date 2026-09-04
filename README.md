@@ -1,8 +1,7 @@
 # Absolver
 
 Automated LLM refusal-abliteration pipeline (LangGraph-based), inspired by
-[OBLITERATUS](https://github.com/elder-plinius/OBLITERATUS). Builds on the
-LFM2.5 / Ornith research lineage in `~/.omp/knowledge/red-team/`.
+[OBLITERATUS](https://github.com/elder-plinius/OBLITERATUS).
 
 ## Pipeline
 
@@ -94,9 +93,20 @@ campaigns accumulate. See `campaigns/README.md` and
 
 - `models/qwen2.5-1.5b-instruct.yaml` — the pipeline test model.
 - `models/lfm2.5-350m.yaml`, `models/lfm2.5-1.2b.yaml` — LFM lineage.
+- `models/lfm2.5-2.6b-instruct.yaml` — LFM2.5-2.6B (the recovery campaign).
 - `models/tiny_test.yaml` — tiny-random CPU smoke test.
 
 ## History
+
+- **2026-09-04** — **LFM2.5-2.6B recovered + published.** From-scratch
+  activation-diff abliteration failed on 2.6B (direction = topic content
+  proxy, banal collapse — see `campaigns/lfm2.5-2.6b/WHY-NOT-DIY.md`).
+  Recovered the edit from a third-party Q8 GGUF by rank-1 SVD of the
+  weight delta (rel_mad 0.0061 vs the Q8 source) and re-applied it to a
+  fresh base. Published as `PinoCookie/LFM2.5-2.6B-Abliterated`.
+  Toolkit fix: `recipe_v2.py` — from-scratch v2 recipe with 4-channel
+  coverage (incl. `attn_out`), graduated heretic-style alpha profile, and
+  a direction-quality pre-probe before the full apply.
 
 - **2026-09-02 (evening)** — **First POSITIVE campaign + published model.**
   `campaigns/lfm2.5-recovery/` recovered huihui's direction vectors from her
@@ -106,10 +116,10 @@ campaigns accumulate. See `campaigns/README.md` and
   rel_l2 0.0013–0.0023, refusal 0/5 with verbatim real compliance at default
   greedy, PPL +5.8%, MMLU-mini retention 1.0. Published as
   `PinoCookie/LFM2.5-1.2B-Instruct-Abliterated` (card:
-  `~/.omp/knowledge/red-team/model-card-lfm2.5-1.2b-instruct.md`). Resolved
-  the direction confound laid out by the all-32 campaign; the recipe (rank-1
-  SVD recovery) is documented in the KB method writeup
-  `01-abliteration/rank1-svd-recovery.md`.
+  `campaigns/lfm2.5-recovery/hf-upload/README.md`). Resolved
+  the direction confound laid out by the all-32 campaign; the rank-1 SVD
+  recovery recipe is documented in `campaigns/lfm2.5-recovery/README.md`.
+
 - **2026-09-02** — Toolkit pivot. The full-auto sweep loop was retired as
   the main path: it hid 6 silent bugs (down_proj never ablated, alpha>2
   sign-flip amplifier, PPL empty slice, bias_vectors no-op on bias-less
@@ -124,3 +134,27 @@ campaigns accumulate. See `campaigns/README.md` and
   gate-aware reflexion. The gates immediately exposed that the diag's
   "0.0 refusal" was a stacked-ablation artifact (ablated model still
   refuses 9/10 on a held-out split).
+
+## Scope & responsible use
+
+Absolver is a **safety/interpretability research tool** for studying refusal
+circuits in open-weight LLMs — how refusal is represented, where it lives,
+and how fragile it is to weight-space edits. It is inspired by and builds on
+public work in this space (OBLITERATUS, the huihui-ai / mradermacher model
+lineages).
+
+- **Research framing**: every campaign documents what was tried, what
+  failed, and the evaluation gates a model must pass before it is considered
+  "ablated" (see Verification contract above). Negative results are reported
+  as prominently as positive ones.
+- **Target models**: small open-weight research models (LFM2.5 family, 230M–
+  8B). Published ablated models are labeled as such and include their gate
+  results and recipe configs.
+- **What this is not**: not a tool for evading safety on deployed/proprietary
+  models, not a jailbreak kit, and not endorsement of removing safety from
+  models used in production. Ablated models are research artifacts: they
+  follow instructions they were not safety-tuned to refuse, and should not be
+  deployed where that matters without re-alignment.
+- **Dual-use note**: the repository contains transcripts of model outputs to
+  safety prompts as experimental evidence. They are kept as data, not as
+  exploit material.
