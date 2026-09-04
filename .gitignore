@@ -26,3 +26,11 @@ logs/
 campaigns/**/model.safetensors
 abl-work/
 phase2-staging/
+
+# Downloaded reference artifacts (multi-GB, not repo content)
+heretic-gguf/
+campaigns/**/*.npz
+campaigns/**/heretic-55_transcripts_*_FULL.json
+campaigns/**/*_512tok_bak.json
+# hf-upload: keep the provenance/config files, never the weight binary
+campaigns/**/hf-upload/model.safetensors

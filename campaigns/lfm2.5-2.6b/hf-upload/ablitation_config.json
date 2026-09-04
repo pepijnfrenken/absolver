@@ -1,0 +1,41 @@
+{
+  "model_id": "LiquidAI/LFM2.5-2.6B",
+  "abliterated_model_id": "PinoCookie/LFM2.5-2.6B-Abliterated",
+  "method": "recovered",
+  "dir_method": "recovered-rank1-svd",
+  "probe_mode": "weights-svd",
+  "description": "Rank-1 SVD recovery of the Abiray/LFM2.5-2.6B-Heretic-Abliterated-GGUF (Q8_0) edit, reconstructed WITHOUT access to its weights by tensor-diffing the quantized GGUF against the pristine base HF BF16 weights (orientation-robust MAD). 52 edited output-projection tensors deviate 0.020-0.027 rel_mad (4x Q8 noise floor 0.006); norms byte-identical (not a fine-tune/LoRA). Each delta is rank-1 (top1 singular share 0.97-0.98, participation ratio ~1.0-1.1); per-tensor SVD extracts (sigma1, u1, v1). Re-application W' = W + sigma1*u1*v1^T on a fresh base (52/52 applied, 0 skipped) reproduces the reference at rel_mad 0.0234 -> 0.0061 (Q8 noise floor). All 52 edits share a single 2048-d left-singular direction u1 across the network (|cos| 0.96-0.99); layers 0-4 untouched; per-layer sigma1 graduates peaking ~L13-17.",
+  "reference_edit": "Abiray/LFM2.5-2.6B-Heretic-Abliterated-GGUF",
+  "changed_tensors": 52,
+  "tensor_classes": {
+    "conv_out_proj": 20,
+    "ffn_w2": 25,
+    "attn_out_proj": 7
+  },
+  "layers_untouched": [0, 1, 2],
+  "sigma_profile": "graduated per-layer, peak ~L13-17, range 0.80-2.81 (mean 1.44)",
+  "shared_u1_cos": "0.96-0.99 across all 52 tensors",
+  "weights": [
+    "conv.out_proj",
+    "feed_forward.w2",
+    "self_attn.out_proj"
+  ],
+  "alpha": 1.0,
+  "passes": 1,
+  "rel_mad_per_tensor": "0.020-0.027 (mean ~0.024, vs Q8 noise floor 0.006)",
+  "fingerprint_rel_mad_vs_reference": "0.0234 -> 0.0061 (Q8 noise floor; untouched tensors 0.0057)",
+  "behavioral_gates": {
+    "refusal_deepseek_v4_flash_55": "6/55 non-delivering (10.9%); reference 1/55 (1.8%); pristine ~100%",
+    "refusal_style_classifier_55": "0/55 hard refusals on the same 55 prompts",
+    "content_quality_deepseek": "48/55 useful, 6 refusal, 1 hallucinated",
+    "benign_coherence": "no collapse (geometry-port control collapse uniq 0.54 vs pristine 0.86 demonstrates the recovered model is NOT collapsed)",
+    "degeneracy": "0.0",
+    "sigma_push_sweep": "1.0/1.2/1.5x: problems 0/6 at all mults, controls 2/6->0/6->1/6 — sigma-push NOT supported, stopped"
+  },
+  "hardware": "Modal L4 (24 GB) for apply/generate; CPU for diff/SVD",
+  "compute": "~0.5 GPU-hrs (apply + 55-gen gate + 12-gen sigma sweep)",
+  "date": "2026-09-04",
+  "campaign": "campaigns/lfm2.5-2.6b/ (absolver repo)",
+  "source_manifest": "campaigns/lfm2.5-2.6b/heretic-recovered-dirs.npz + weight-diff-*.json + fingerprint-recovered-vs-heretic.json",
+  "generation": "1536-token setting for behavioral re-judge; default decoding for gates"
+}
